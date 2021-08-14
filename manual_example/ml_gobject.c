@@ -12,7 +12,7 @@ void dispose_signal_handler(void *callbackCell, GClosure *closure) {
   free(callbackCell);
 }
 
-CAMLprim value ml_GObject_signal_connect(value instance, const char *signal, void *c_handler, value callback) {
+value ml_GObject_signal_connect(value instance, const char *signal, void *c_handler, value callback) {
   CAMLparam2(instance, callback);
 
   value *callbackCell = malloc(sizeof(value));
