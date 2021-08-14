@@ -7,17 +7,13 @@
 #include <caml/callback.h>
 #include "ml_gobject.h"
 
-void void_signal_handler(GObject *self, value *callbackCell) {
-  caml_callback(*callbackCell, Val_unit);
-}
-
 void dispose_signal_handler(void *callbackCell, GClosure *closure) {
   caml_remove_global_root(callbackCell);
   free(callbackCell);
 }
 
-CAMLprim value ml_GObject_signal_connect(value instance, value signal, value callback) {
-  CAMLparam3(instance, signal, callback);
+CAMLprim value ml_GObject_signal_connect(value instance, const char *signal, void *c_handler, value callback) {
+  CAMLparam2(instance, callback);
 
   value *callbackCell = malloc(sizeof(value));
   if (callbackCell == 0) abort();
@@ -27,8 +23,8 @@ CAMLprim value ml_GObject_signal_connect(value instance, value signal, value cal
 
   gulong id = g_signal_connect_data(
       GObject_val(instance),
-      "activate", // String_val(signal)
-      G_CALLBACK(void_signal_handler),
+      signal,
+      G_CALLBACK(c_handler),
       callbackCell,
       dispose_signal_handler,
       0);
