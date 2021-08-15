@@ -58,37 +58,48 @@ def process_namespace(namespace):
     cf('#include <caml/memory.h>')
     cf('#include <caml/callback.h>')
     cf('#include "ml_gobject.h"')
-    classes = {}
-    enums = {}
+    ns_elems = {}
     for elem in namespace:
-        if elem.tag == t_class:
-            classes[elem.attrib['name']] = elem
-        elif elem.tag == t_enumeration:
-            enums[elem.attrib['name']] = elem
-    for name, elem in classes.items():
+        if 'name' in elem.attrib:
+            ns_elems[elem.attrib['name']] = elem
+    for ns_elem in namespace:
+        if ns_elem.tag != t_class:
+            continue
+        name = ns_elem.attrib['name']
         ancestor = name
         ancestors = []
         while ancestor != 'GObject.Object':
-            if ancestor not in classes:
+            if ancestor not in ns_elems:
                 print('Warning: incomplete ancestry of class %s due to unknown ancestor %s' % (name, ancestor))
                 break
             ancestors.append(ancestor)
-            ancestor = classes[ancestor].attrib['parent']
+            if 'parent' not in ns_elems[ancestor].attrib:
+                print('Warning: class %s has no parent' % ancestor)
+                break
+            ancestor = ns_elems[ancestor].attrib['parent']
         ml('type %s = [%s]' % (pascal_case_to_snake_case(name),
-            '|'.join(('`' + classes[a].attrib[a_type_name] for a in ancestors))))
+            '|'.join(('`' + ns_elems[a].attrib[a_type_name] for a in ancestors))))
     def ml_to_c_type(typ):
-        if typ.attrib['name'] in enums:
-            return ('int', 'Int_val(%s)', 'int')
-        elif typ.attrib['name'] in classes:
-            c_type = classes[typ.attrib['name']].attrib[a_type_name]
-            return ('[>`%s] obj' % c_type, 'GObject_val(%s)', '%s *' % c_type)
+        if typ.attrib['name'] in ns_elems:
+            ns_elem = ns_elems[typ.attrib['name']]
+            if ns_elem.tag == t_enumeration:
+                return ('int', 'Int_val(%s)', 'int')
+            elif ns_elem.tag == t_class:
+                c_type = ns_elem.attrib[a_type_name]
+                return ('[>`%s] obj' % c_type, 'GObject_val(%s)', '%s *' % c_type)
+            else:
+                return None
         else:
             return None
     def c_to_ml_type(typ):
-        if typ.attrib['name'] in enums:
-            return ('int', 'Val_int(%s)', 'int')
-        elif typ.attrib['name'] in classes:
-            return (pascal_case_to_snake_case(typ.attrib['name']), 'Val_GObject(%s)', '%s *' % classes[typ.attrib['name']].attrib[a_type_name])
+        ns_elem = ns_elems.get(typ.attrib['name'], None)
+        if ns_elem != None:
+            if ns_elem.tag == t_enumeration:
+                return ('int', 'Val_int(%s)', 'int')
+            elif ns_elem.tag == t_class:
+                return (pascal_case_to_snake_case(typ.attrib['name']), 'Val_GObject(%s)', '%s *' % ns_elem.attrib[a_type_name])
+            else:
+                return None
         else:
             return None
     for ns_elem in namespace:
