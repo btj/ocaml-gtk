@@ -201,6 +201,12 @@ def process_namespace(namespace, env):
                                 skip = True
                             result = types
                     if not skip:
+                        if c_elem_tag == 'constructor':
+                            expected_result = (pascal_case_to_snake_case(ns_elem.attrib['name']), 'Val_GObject(%s)', '%s *' % c_type_name)
+                            if result != expected_result:
+                                if result[0] != 'widget' and result[0] != 'Gtk.widget':
+                                    print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' % (c_elem.attrib['name'], ns.name + '.' + ns_elem.attrib['name']))
+                                result = expected_result
                         cfunc = 'ml_%s_%s_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_elem.attrib['name'])
                         mlfunc = escape_ml_keyword(c_elem.attrib['name'])
                         ml('  external %s: %s -> %s = "%s"' % (mlfunc, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
