@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 
+t_include = "{http://www.gtk.org/introspection/core/1.0}include"
 t_namespace = "{http://www.gtk.org/introspection/core/1.0}namespace"
 t_class = "{http://www.gtk.org/introspection/core/1.0}class"
 t_attribute = "{http://www.gtk.org/introspection/core/1.0}attribute"
@@ -12,6 +13,7 @@ t_type = "{http://www.gtk.org/introspection/core/1.0}type"
 t_property = "{http://www.gtk.org/introspection/core/1.0}property"
 t_signal = "{http://www.gtk.org/introspection/glib/1.0}signal"
 t_enumeration = "{http://www.gtk.org/introspection/core/1.0}enumeration"
+t_bitfield = "{http://www.gtk.org/introspection/core/1.0}bitfield"
 
 a_type_name = "{http://www.gtk.org/introspection/glib/1.0}type-name"
 a_identifier = "{http://www.gtk.org/introspection/c/1.0}identifier"
@@ -30,7 +32,7 @@ ml_keywords = {
 }
 
 def escape_ml_keyword(name):
-    return name + '_' if name in ml_keywords else name
+    return '_' + name if name in ml_keywords else name
 
 def pascal_case_to_snake_case(name):
     result = name[0].lower()
@@ -41,7 +43,37 @@ def pascal_case_to_snake_case(name):
             result += name[i]
     return result
 
-def process_namespace(namespace):
+class Namespace:
+    def __init__(self, env, xml):
+        self.xml = xml
+        self.name = xml.attrib['name']
+        ns_elems = {}
+        for elem_xml in xml:
+            name = elem_xml.attrib.get('name', None)
+            if name is not None:
+                ns_elem = NamespaceElement(self, elem_xml)
+                ns_elems[name] = ns_elem
+        self.elems = ns_elems
+        self.local_env = env | ns_elems
+        self.global_env = env | dict((self.name + '.' + ns_elem_name, ns_elem) for ns_elem_name, ns_elem in ns_elems.items())
+
+class NamespaceElement:
+    def __init__(self, ns, xml):
+        self.ns = ns
+        self.xml = xml
+        self.name = xml.attrib['name']
+        self.qualified_name = ns.name + '.' + self.name
+    
+    def qualify_for(self, other_ns):
+        if other_ns is self.ns:
+            return self.name
+        else:
+            return self.qualified_name
+
+namespaces = {}
+
+def process_namespace(namespace, env):
+    namespace_name = namespace.attrib['name']
     ml_file = open(namespace.attrib['name'] + '.ml', 'w')
     def ml(*args):
         print(*args, file=ml_file)
@@ -58,46 +90,63 @@ def process_namespace(namespace):
     cf('#include <caml/memory.h>')
     cf('#include <caml/callback.h>')
     cf('#include "ml_gobject.h"')
-    ns_elems = {}
-    for elem in namespace:
-        if 'name' in elem.attrib:
-            ns_elems[elem.attrib['name']] = elem
-    for ns_elem in namespace:
-        if ns_elem.tag != t_class:
+    ns = Namespace(env, namespace)
+    local_env = ns.local_env
+    namespaces[namespace_name] = ns
+    for ns_elem_name, ns_elem in ns.elems.items():
+        if ns_elem.xml.tag != t_class:
             continue
-        name = ns_elem.attrib['name']
-        ancestor = name
         ancestors = []
-        while ancestor != 'GObject.Object':
-            if ancestor not in ns_elems:
-                print('Warning: incomplete ancestry of class %s due to unknown ancestor %s' % (name, ancestor))
+        ancestor = ns_elem
+        while True:
+            if ancestor.qualified_name == "GObject.Object" or ancestor.qualified_name == "GObject.InitiallyUnowned":
                 break
             ancestors.append(ancestor)
-            if 'parent' not in ns_elems[ancestor].attrib:
-                print('Warning: class %s has no parent' % ancestor)
+            parent_name = ancestor.xml.attrib.get('parent', None)
+            if parent_name is None:
+                print('Warning: while determining ancestry of class %s: class %s has no parent' % (ns_elem_name, ancestor.qualified_name))
                 break
-            ancestor = ns_elems[ancestor].attrib['parent']
-        ml('type %s = [%s]' % (pascal_case_to_snake_case(name),
-            '|'.join(('`' + ns_elems[a].attrib[a_type_name] for a in ancestors))))
+            ancestor = ancestor.ns.local_env.get(parent_name, None)
+            if ancestor is None:
+                print('Warning: incomplete ancestry of class %s due to unknown ancestor %s' % (ns_elem_name, parent_name))
+                break
+        ml('type %s = [%s]' % (pascal_case_to_snake_case(ns_elem_name),
+            '|'.join('`' + a.xml.attrib[a_type_name] for a in ancestors)))
     def ml_to_c_type(typ):
-        if typ.attrib['name'] in ns_elems:
-            ns_elem = ns_elems[typ.attrib['name']]
-            if ns_elem.tag == t_enumeration:
+        name = typ.attrib.get('name')
+        if name == 'utf8':
+            return ('string', 'String_val(%s)', 'const char *')
+        elif name == 'gboolean':
+            return ('bool', 'Bool_val(%s)', 'gboolean')
+        elif name == 'gint32':
+            return ('int', 'Long_val(%s)', 'gint32')
+        elif name == 'guint32':
+            return ('int', 'Long_val(%s)', 'guint32')
+        ns_elem = local_env.get(name, None)
+        if ns_elem is not None:
+            if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
                 return ('int', 'Int_val(%s)', 'int')
-            elif ns_elem.tag == t_class:
-                c_type = ns_elem.attrib[a_type_name]
+            elif ns_elem.xml.tag == t_class:
+                c_type = ns_elem.xml.attrib[a_type_name]
                 return ('[>`%s] obj' % c_type, 'GObject_val(%s)', '%s *' % c_type)
             else:
                 return None
         else:
             return None
     def c_to_ml_type(typ):
-        ns_elem = ns_elems.get(typ.attrib['name'], None)
+        name = typ.attrib['name']
+        if name == 'gint32':
+            return ('int', 'Val_long(%s)', 'gint32')
+        elif name == 'guint32':
+            return ('int', 'Val_long(%s)', 'guint32')
+        elif name == 'gboolean':
+            return ('bool', '(%s ? Val_true : Val_false)', 'gboolean')
+        ns_elem = local_env.get(name, None)
         if ns_elem != None:
-            if ns_elem.tag == t_enumeration:
+            if ns_elem.xml.tag == t_enumeration:
                 return ('int', 'Val_int(%s)', 'int')
-            elif ns_elem.tag == t_class:
-                return (pascal_case_to_snake_case(typ.attrib['name']), 'Val_GObject(%s)', '%s *' % ns_elem.attrib[a_type_name])
+            elif ns_elem.xml.tag == t_class:
+                return (("" if ns_elem.ns is ns else ns_elem.ns.name + '.') + pascal_case_to_snake_case(name), 'Val_GObject(%s)', '%s *' % ns_elem.xml.attrib[a_type_name])
             else:
                 return None
         else:
@@ -204,18 +253,24 @@ def process_namespace(namespace):
                                 skip = True
                             result = types
                     if not skip:
-                        handlerfunc = 'ml_%s_%s_signal_handler_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_elem.attrib['name'])
-                        cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_elem.attrib['name'])
-                        ml('  external signal_connect_%s: [>`%s] -> (%s -> %s) -> int = "%s"' % (c_elem.attrib['name'], ns_elem.attrib[a_type_name], "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
+                        c_name = c_elem.attrib['name'].replace('-', '_')
+                        handlerfunc = 'ml_%s_%s_signal_handler_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
+                        cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
+                        ml('  external signal_connect_%s: [>`%s] -> (%s -> %s) -> int = "%s"' % (c_name, ns_elem.attrib[a_type_name], "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
                         cf()
                         cf('%s %s(%s) {' % (result[2], handlerfunc, ', '.join('%s %s' % (p[1][2], p[0]) for p in params)))
-                        handler_return = '' if result[0] == 'unit' else 'return '
+                        cf('  CAMLparam0();')
+                        nb_args = max(1, len(params))
+                        cf('  CAMLlocalN(args, %d);' % nb_args)
+                        cf('  if (!callbacks_allowed) abort();')
+                        cf('  callbacks_allowed = false;')
                         callback_args = 'Val_unit' if params == [] else ', '.join(p[1][1] % p[0] for p in params)
-                        if len(params) <= 3:
-                            cf('  %scaml_callback%s(*callbackCell, %s);' % (handler_return, '' if len(params) <= 1 else str(len(params)), callback_args))
-                        else:
-                            cf('  value[] args = {%s};' % callback_args)
-                            cf('  %scaml_callbackN(*callbackCell, %d, args);' % (handler_return, len(params)))
+                        for i in range(nb_args):
+                            cf('  args[%d] = %s;' % (i, callback_args[i]))
+                        result_decl, return_stmt = (';', 'CAMLreturn0();') if result[0] == 'unit' else ('%s result = ' % result[2], 'CAMLreturnT(%s, result);' % result[2])
+                        callback = 'caml_callbackN(*callbackCell, %d, args)' % nb_args
+                        cf('  %s%s;' % (result_decl, callback))
+                        cf('  %s' % return_stmt)
                         cf('}')
                         cf()
                         cf('CAMLprim value %s(value instance, value callback) {' % cfunc)
@@ -223,12 +278,24 @@ def process_namespace(namespace):
                         cf('}')
             ml('end')
 
-tree = ET.parse('Gio-2.0.xml')
-root = tree.getroot()
+def process_root(filepath):
+    print('Processing %s...' % filepath)
+    tree = ET.parse(filepath)
+    root = tree.getroot()
 
-for e in root:
-    if e.tag == t_namespace:
-        process_namespace(e)
-    else:
-        print('Ignoring "%s" element' % (e.tag,))
+    env = {}
+    for e in root:
+        if e.tag == t_include:
+            name = e.attrib['name']
+            ns = namespaces.get(name, None)
+            if ns is None:
+                print('%s: ignoring include of %s: no such namespace' % (filepath, name))
+                continue
+            env.update(ns.global_env)
+        elif e.tag == t_namespace:
+            process_namespace(e, env)
+        else:
+            print('Ignoring "%s" element' % (e.tag,))
 
+for filepath in ['GLib-2.0.xml', 'GObject-2.0.xml', 'Gio-2.0.xml', 'Gdk-4.0.xml', 'Gtk-4.0.xml']:
+    process_root(filepath)
