@@ -62,7 +62,10 @@ class NamespaceElement:
         self.ns = ns
         self.xml = xml
         self.name = xml.attrib['name']
+        self.ml_name = escape_ml_keyword(pascal_case_to_snake_case(self.name))
         self.qualified_name = ns.name + '.' + self.name
+        c_type_name = xml.attrib.get(a_type_name, None)
+        self.c_type_name = 'GParamSpec' if c_type_name == 'GParam' else c_type_name
     
     def qualify_for(self, other_ns):
         if other_ns is self.ns:
@@ -82,14 +85,14 @@ def process_namespace(namespace, env):
         print(*args, file=c_file)
     ml('[@@@alert "-unsafe"]')
     ml()
-    ml('open Gobject')
+    ml('open Gobject0')
     ml()
     cf('#include <gtk/gtk.h>')
     cf('#define CAML_NAME_SPACE')
     cf('#include <caml/mlvalues.h>')
     cf('#include <caml/memory.h>')
     cf('#include <caml/callback.h>')
-    cf('#include "ml_gobject.h"')
+    cf('#include "ml_gobject0.h"')
     ns = Namespace(env, namespace)
     local_env = ns.local_env
     namespaces[namespace_name] = ns
@@ -98,8 +101,10 @@ def process_namespace(namespace, env):
             continue
         ancestors = []
         ancestor = ns_elem
+        ns_elem.is_GObject = False
         while True:
             if ancestor.qualified_name == "GObject.Object" or ancestor.qualified_name == "GObject.InitiallyUnowned":
+                ns_elem.is_GObject = True
                 break
             ancestors.append(ancestor)
             parent_name = ancestor.xml.attrib.get('parent', None)
@@ -110,8 +115,9 @@ def process_namespace(namespace, env):
             if ancestor is None:
                 print('Warning: incomplete ancestry of class %s due to unknown ancestor %s' % (ns_elem_name, parent_name))
                 break
-        ml('type %s = [%s]' % (pascal_case_to_snake_case(ns_elem_name),
-            '|'.join('`' + a.xml.attrib[a_type_name] for a in ancestors)))
+        if ns_elem.is_GObject:
+            ml('type %s = [%s]' % (ns_elem.ml_name,
+                '|'.join('`' + a.c_type_name for a in ancestors)))
     def ml_to_c_type(typ):
         name = typ.attrib.get('name')
         if name == 'utf8':
@@ -126,8 +132,8 @@ def process_namespace(namespace, env):
         if ns_elem is not None:
             if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
                 return ('int', 'Int_val(%s)', 'int')
-            elif ns_elem.xml.tag == t_class:
-                c_type = ns_elem.xml.attrib[a_type_name]
+            elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
+                c_type = ns_elem.c_type_name
                 return ('[>`%s] obj' % c_type, 'GObject_val(%s)', '%s *' % c_type)
             else:
                 return None
@@ -145,15 +151,18 @@ def process_namespace(namespace, env):
         if ns_elem != None:
             if ns_elem.xml.tag == t_enumeration:
                 return ('int', 'Val_int(%s)', 'int')
-            elif ns_elem.xml.tag == t_class:
-                return (("" if ns_elem.ns is ns else ns_elem.ns.name + '.') + pascal_case_to_snake_case(name), 'Val_GObject(%s)', '%s *' % ns_elem.xml.attrib[a_type_name])
+            elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
+                return (("" if ns_elem.ns is ns else ns_elem.ns.name + '.') + ns_elem.ml_name, 'Val_GObject((void *)(%s))', '%s *' % ns_elem.c_type_name)
             else:
                 return None
         else:
             return None
     for ns_elem in namespace:
         if ns_elem.tag == t_class:
-            c_type_name = ns_elem.attrib[a_type_name]
+            nse = local_env[ns_elem.attrib['name']]
+            if not nse.is_GObject:
+                continue
+            c_type_name = nse.c_type_name
             ml()
             ml('module %s_ = struct' % ns_elem.attrib['name'])
             for c_elem in ns_elem:
@@ -202,7 +211,7 @@ def process_namespace(namespace, env):
                             result = types
                     if not skip:
                         if c_elem_tag == 'constructor':
-                            expected_result = (pascal_case_to_snake_case(ns_elem.attrib['name']), 'Val_GObject(%s)', '%s *' % c_type_name)
+                            expected_result = (nse.ml_name, 'Val_GObject((void *)(%s))', '%s *' % c_type_name)
                             if result != expected_result:
                                 if result[0] != 'widget' and result[0] != 'Gtk.widget':
                                     print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' % (c_elem.attrib['name'], ns.name + '.' + ns_elem.attrib['name']))
@@ -221,6 +230,27 @@ def process_namespace(namespace, env):
                         else:
                             cf('  CAMLreturn(%s);' % (result[1] % call))
                         cf('}')
+                    elif ns.name == 'Gio' and ns_elem.attrib['name'] == 'Application' and c_elem.attrib['name'] == 'run':
+                        ml('  external run: [`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
+                        cf('''
+CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
+  CAMLparam2(application, argvValue);
+  int argc = Wosize_val(argvValue);
+  char **argv = malloc(argc * sizeof(char *));
+  if (argv == 0) abort();
+  for (int i = 0; i < argc; i++)
+    argv[i] = strdup(String_val(Field(argvValue, i)));
+
+  callbacks_allowed = true;
+  int result = g_application_run(GObject_val(application), argc, argv);
+  callbacks_allowed = false;
+
+  for (int i = 0; i < argc; i++)
+    free(argv[i]);
+  free(argv);
+  CAMLreturn(Val_int(result));
+}
+''')
                 elif c_elem.tag == t_signal:
                     params = []
                     result = None
@@ -262,20 +292,21 @@ def process_namespace(namespace, env):
                         c_name = c_elem.attrib['name'].replace('-', '_')
                         handlerfunc = 'ml_%s_%s_signal_handler_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
                         cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
-                        ml('  external signal_connect_%s: [>`%s] -> (%s -> %s) -> int = "%s"' % (c_name, ns_elem.attrib[a_type_name], "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
+                        ml('  external signal_connect_%s: [>`%s] -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
                         cf()
-                        cf('%s %s(%s) {' % (result[2], handlerfunc, ', '.join('%s %s' % (p[1][2], p[0]) for p in params)))
+                        cf('%s %s(GObject *instance, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p[1][2], p[0]) for p in params)))
                         cf('  CAMLparam0();')
                         nb_args = max(1, len(params))
                         cf('  CAMLlocalN(args, %d);' % nb_args)
                         cf('  if (!callbacks_allowed) abort();')
                         cf('  callbacks_allowed = false;')
-                        callback_args = 'Val_unit' if params == [] else ', '.join(p[1][1] % p[0] for p in params)
+                        callback_args = ['Val_unit'] if params == [] else [p[1][1] % p[0] for p in params]
                         for i in range(nb_args):
                             cf('  args[%d] = %s;' % (i, callback_args[i]))
-                        result_decl, return_stmt = (';', 'CAMLreturn0();') if result[0] == 'unit' else ('%s result = ' % result[2], 'CAMLreturnT(%s, result);' % result[2])
+                        result_decl, return_stmt = (';', 'CAMLreturn0;') if result[0] == 'unit' else ('%s result = ' % result[2], 'CAMLreturnT(%s, result);' % result[2])
                         callback = 'caml_callbackN(*callbackCell, %d, args)' % nb_args
                         cf('  %s%s;' % (result_decl, callback))
+                        cf('  callbacks_allowed = true;')
                         cf('  %s' % return_stmt)
                         cf('}')
                         cf()
