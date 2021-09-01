@@ -92,6 +92,8 @@ def process_namespace(namespace, env):
     cf('#include <caml/mlvalues.h>')
     cf('#include <caml/memory.h>')
     cf('#include <caml/callback.h>')
+    cf('#include <caml/alloc.h>')
+    cf('#include <caml/fail.h>')
     cf('#include "ml_gobject0.h"')
     ns = Namespace(env, namespace)
     local_env = ns.local_env
@@ -134,7 +136,7 @@ def process_namespace(namespace, env):
                 return ('int', 'Int_val(%s)', 'int')
             elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
                 c_type = ns_elem.c_type_name
-                return ('[>`%s] obj' % c_type, 'GObject_val(%s)', '%s *' % c_type)
+                return ('[>`%s] obj' % c_type, 'GObject_val(%s)', 'void *') # '%s *' % c_type
             else:
                 return None
         else:
@@ -152,7 +154,7 @@ def process_namespace(namespace, env):
             if ns_elem.xml.tag == t_enumeration:
                 return ('int', 'Val_int(%s)', 'int')
             elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
-                return (("" if ns_elem.ns is ns else ns_elem.ns.name + '.') + ns_elem.ml_name, 'Val_GObject((void *)(%s))', '%s *' % ns_elem.c_type_name)
+                return (("" if ns_elem.ns is ns else ns_elem.ns.name + '.') + ns_elem.ml_name, 'Val_GObject((void *)(%s))', 'void *') # '%s *' % ns_elem.c_type_name)
             else:
                 return None
         else:
@@ -171,12 +173,21 @@ def process_namespace(namespace, env):
                 elif c_elem.tag == t_constructor or c_elem.tag == t_method:
                     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
                     params = [('instance', ('[>`%s] obj' % c_type_name, 'GObject_val(%s)', '%s *' % c_type_name))] if c_elem_tag == 'method' else []
+                    throws = c_elem.attrib.get('throws', None) == '1'
                     result = None
                     skip = False
                     for m_elem in c_elem:
                         if m_elem.tag == t_parameters:
                             for ps_elem in m_elem:
                                 assert ps_elem.tag == t_parameter
+                                if ps_elem.attrib.get('transfer-ownership', None) != 'none':
+                                    print('Skipping %s %s of class %s: missing transfer-ownership="none" attribute for parameter %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ps_elem.attrib['name']))
+                                    skip = True
+                                    continue
+                                if 'direction' in ps_elem.attrib:
+                                    print('Skipping %s %s of class %s: explicit "direction" attribute for parameter %s not yet supported' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ps_elem.attrib['name']))
+                                    skip = True
+                                    continue
                                 typ = None
                                 types = None
                                 for p_elem in ps_elem:
@@ -211,7 +222,7 @@ def process_namespace(namespace, env):
                             result = types
                     if not skip:
                         if c_elem_tag == 'constructor':
-                            expected_result = (nse.ml_name, 'Val_GObject((void *)(%s))', '%s *' % c_type_name)
+                            expected_result = (nse.ml_name, 'Val_GObject((void *)(%s))', 'void *')
                             if result != expected_result:
                                 if result[0] != 'widget' and result[0] != 'Gtk.widget':
                                     print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' % (c_elem.attrib['name'], ns.name + '.' + ns_elem.attrib['name']))
@@ -222,13 +233,20 @@ def process_namespace(namespace, env):
                         cf()
                         cf('CAMLprim value %s(%s) {' % (cfunc, ', '.join('value %s' % p[0] for p in params)))
                         cf('  CAMLparam%d(%s);' % (len(params), ', '.join(p[0] for p in params)))
-                        args = ', '.join(p[1][1] % p[0] for p in params)
+                        if throws:
+                            cf('  CAMLlocal1(exn_msg);');
+                            cf('  GError *err = NULL;')
+                        args = ', '.join([p[1][1] % p[0] for p in params] + (['&err'] if throws else []))
                         call = '%s(%s)' % (c_elem.attrib[a_identifier], args)
                         if result[0] == 'unit':
                             cf('  %s;' % call)
-                            cf('  CAMLreturn(Val_unit);')
+                            ml_result = 'Val_unit'
                         else:
-                            cf('  CAMLreturn(%s);' % (result[1] % call))
+                            cf('  %s result = %s;' % (result[2], call))
+                            ml_result = result[1] % 'result'
+                        if throws:
+                            cf('  if (err) { exn_msg = caml_copy_string(err->message); g_error_free(err); caml_failwith_value(exn_msg); }')
+                        cf('  CAMLreturn(%s);' % ml_result)
                         cf('}')
                     elif ns.name == 'Gio' and ns_elem.attrib['name'] == 'Application' and c_elem.attrib['name'] == 'run':
                         ml('  external run: [`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
