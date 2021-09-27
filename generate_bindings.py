@@ -34,6 +34,13 @@ ml_keywords = {
 def escape_ml_keyword(name):
     return '_' + name if name in ml_keywords else name
 
+c_keywords = {
+        'value'
+}
+
+def escape_c_keyword(name):
+    return '_' + name if name in c_keywords else name
+
 def pascal_case_to_snake_case(name):
     result = name[0].lower()
     for i in range(1, len(name)):
@@ -87,6 +94,16 @@ def process_namespace(namespace, env):
     ml()
     ml('open Gobject0')
     ml()
+    cf('#define G_SETTINGS_ENABLE_BACKEND')
+    cf('#include <gio/gsettingsbackend.h>')
+    cf('#include <gio/gunixconnection.h>')
+    cf('#include <gio/gunixcredentialsmessage.h>')
+    cf('#include <gio/gunixfdlist.h>')
+    cf('#include <gio/gunixfdmessage.h>')
+    cf('#include <gio/gunixinputstream.h>')
+    cf('#include <gio/gunixmounts.h>')
+    cf('#include <gio/gunixoutputstream.h>')
+    cf('#include <gio/gunixsocketaddress.h>')
     cf('#include <gtk/gtk.h>')
     cf('#define CAML_NAME_SPACE')
     cf('#include <caml/mlvalues.h>')
@@ -154,7 +171,7 @@ def process_namespace(namespace, env):
             if ns_elem.xml.tag == t_enumeration:
                 return ('int', 'Val_int(%s)', 'int')
             elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
-                return (("" if ns_elem.ns is ns else ns_elem.ns.name + '.') + ns_elem.ml_name, 'Val_GObject((void *)(%s))', 'void *') # '%s *' % ns_elem.c_type_name)
+                return (("" if ns_elem.ns is ns else ns_elem.ns.name.capitalize() + '.') + ns_elem.ml_name, 'Val_GObject((void *)(%s))', 'void *') # '%s *' % ns_elem.c_type_name)
             else:
                 return None
         else:
@@ -202,7 +219,7 @@ def process_namespace(namespace, env):
                                     print('Skipping %s %s of class %s: unsupported type %s of parameter %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ET.tostring(typ), ps_elem.attrib['name']))
                                     skip = True
                                     continue
-                                params.append((ps_elem.attrib['name'], types))
+                                params.append((escape_c_keyword(ps_elem.attrib['name']), types))
                         elif m_elem.tag == t_return_value:
                             typ = None
                             types = None
@@ -291,7 +308,7 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
                                     print('Skipping signal %s of class %s: unsupported type %s of parameter %s' % (c_elem.attrib['name'], ns_elem.attrib['name'], ET.tostring(typ), ps_elem.attrib['name']))
                                     skip = True
                                     continue
-                                params.append((ps_elem.attrib['name'], types))
+                                params.append((escape_c_keyword(ps_elem.attrib['name']), types))
                         elif s_elem.tag == t_return_value:
                             typ = None
                             types = None

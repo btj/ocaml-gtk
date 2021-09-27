@@ -4,9 +4,9 @@ Gtk-4.0.xml:
 	# g-ir-generate and typelibs provided by package gobject-introspection
 	g-ir-generate -o GLib-2.0.xml /usr/local/lib/girepository-1.0/GLib-2.0.typelib
 	g-ir-generate -o GObject-2.0.xml /usr/local/lib/girepository-1.0/GObject-2.0.typelib
-	g-ir-generate -o Gio-2.0.xml /usr/local/lib/girepository-1.0/Gio-2.0.xml
-	g-ir-generate -o Gdk-4.0.xml /usr/local/lib/girepository-1.0/Gdk-4.0.xml
-	g-ir-generate -o Gtk-4.0.xml /usr/local/lib/girepository-1.0/Gtk-4.0.xml
+	g-ir-generate -o Gio-2.0.xml /usr/local/lib/girepository-1.0/Gio-2.0.typelib
+	g-ir-generate -o Gdk-4.0.xml /usr/local/lib/girepository-1.0/Gdk-4.0.typelib
+	g-ir-generate -o Gtk-4.0.xml /usr/local/lib/girepository-1.0/Gtk-4.0.typelib
 
 Gtk.ml: Gtk-4.0.xml
 	python3 generate_bindings.py
