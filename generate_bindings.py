@@ -105,6 +105,7 @@ def process_namespace(namespace, env):
     cf('#include <gio/gunixoutputstream.h>')
     cf('#include <gio/gunixsocketaddress.h>')
     cf('#include <gtk/gtk.h>')
+    cf('#include <gtk/gtkunixprint.h>')
     cf('#define CAML_NAME_SPACE')
     cf('#include <caml/mlvalues.h>')
     cf('#include <caml/memory.h>')
@@ -249,7 +250,13 @@ def process_namespace(namespace, env):
                         ml('  external %s: %s -> %s = "%s"' % (mlfunc, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
                         cf()
                         cf('CAMLprim value %s(%s) {' % (cfunc, ', '.join('value %s' % p[0] for p in params)))
-                        cf('  CAMLparam%d(%s);' % (len(params), ', '.join(p[0] for p in params)))
+                        params1 = params[:5]
+                        params2 = params[5:]
+                        cf('  CAMLparam%d(%s);' % (len(params1), ', '.join(p[0] for p in params1)))
+                        while params2 != []:
+                            params2_1 = params2[:5]
+                            params2 = params2[5:]
+                            cf('  CAMLxparam%d(%s);' % (len(params2_1), ', '.join(p[0] for p in params2_1)))
                         if throws:
                             cf('  CAMLlocal1(exn_msg);');
                             cf('  GError *err = NULL;')
