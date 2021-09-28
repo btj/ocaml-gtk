@@ -338,9 +338,9 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
                         callback_args = ['Val_unit'] if params == [] else [p[1][1] % p[0] for p in params]
                         for i in range(nb_args):
                             cf('  args[%d] = %s;' % (i, callback_args[i]))
-                        result_decl, return_stmt = (';', 'CAMLreturn0;') if result[0] == 'unit' else ('%s result = ' % result[2], 'CAMLreturnT(%s, result);' % result[2])
+                        result_decl, result_conv, return_stmt = (';', '%s', 'CAMLreturn0;') if result[0] == 'unit' else ('%s result = ' % result[2], result[1], 'CAMLreturnT(%s, result);' % result[2])
                         callback = 'caml_callbackN(*callbackCell, %d, args)' % nb_args
-                        cf('  %s%s;' % (result_decl, callback))
+                        cf('  %s%s;' % (result_decl, result_conv % callback))
                         cf('  callbacks_allowed = true;')
                         cf('  %s' % return_stmt)
                         cf('}')
