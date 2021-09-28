@@ -238,6 +238,10 @@ def process_namespace(namespace, env):
                                 print('Skipping %s %s of class %s: unsupported return type %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ET.tostring(typ)))
                                 skip = True
                             result = types
+                    if len(params) > 5:
+                        # Skip for now; requires separate C functions for the bytecode runtime and the native code runtime
+                        print('Skipping %s %s of class %s: has more than 5 parameters' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name']))
+                        skip = True
                     if not skip:
                         if c_elem_tag == 'constructor':
                             expected_result = (nse.ml_name, 'Val_GObject((void *)(%s))', 'void *')
