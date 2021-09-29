@@ -1,5 +1,7 @@
 import xml.etree.ElementTree as ET
 
+c_functions_to_skip = {'g_io_module_load', 'g_io_module_unload'} # https://gitlab.gnome.org/GNOME/glib/-/issues/2498
+
 t_include = "{http://www.gtk.org/introspection/core/1.0}include"
 t_namespace = "{http://www.gtk.org/introspection/core/1.0}namespace"
 t_class = "{http://www.gtk.org/introspection/core/1.0}class"
@@ -123,10 +125,10 @@ def process_namespace(namespace, env):
         ancestor = ns_elem
         ns_elem.is_GObject = False
         while True:
-            if ancestor.qualified_name == "GObject.Object" or ancestor.qualified_name == "GObject.InitiallyUnowned":
+            ancestors.append(ancestor)
+            if ancestor.qualified_name == "GObject.Object": # or ancestor.qualified_name == "GObject.InitiallyUnowned":
                 ns_elem.is_GObject = True
                 break
-            ancestors.append(ancestor)
             parent_name = ancestor.xml.attrib.get('parent', None)
             if parent_name is None:
                 print('Warning: while determining ancestry of class %s: class %s has no parent' % (ns_elem_name, ancestor.qualified_name))
@@ -136,7 +138,7 @@ def process_namespace(namespace, env):
                 print('Warning: incomplete ancestry of class %s due to unknown ancestor %s' % (ns_elem_name, parent_name))
                 break
         if ns_elem.is_GObject:
-            ml('type %s = [%s]' % (ns_elem.ml_name,
+            ml('type %s = [%s] obj' % (ns_elem.ml_name,
                 '|'.join('`' + a.c_type_name for a in ancestors)))
     def ml_to_c_type(typ):
         name = typ.attrib.get('name')
@@ -242,6 +244,8 @@ def process_namespace(namespace, env):
                         # Skip for now; requires separate C functions for the bytecode runtime and the native code runtime
                         print('Skipping %s %s of class %s: has more than 5 parameters' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name']))
                         skip = True
+                    if c_elem.attrib[a_identifier] in c_functions_to_skip:
+                        skip = True
                     if not skip:
                         if c_elem_tag == 'constructor':
                             expected_result = (nse.ml_name, 'Val_GObject((void *)(%s))', 'void *')
@@ -277,7 +281,7 @@ def process_namespace(namespace, env):
                         cf('  CAMLreturn(%s);' % ml_result)
                         cf('}')
                     elif ns.name == 'Gio' and ns_elem.attrib['name'] == 'Application' and c_elem.attrib['name'] == 'run':
-                        ml('  external run: [`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
+                        ml('  external run: [>`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
                         cf('''
 CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
   CAMLparam2(application, argvValue);
@@ -338,7 +342,7 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
                         c_name = c_elem.attrib['name'].replace('-', '_')
                         handlerfunc = 'ml_%s_%s_signal_handler_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
                         cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
-                        ml('  external signal_connect_%s: [>`%s] -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
+                        ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
                         cf()
                         cf('%s %s(GObject *instance, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p[1][2], p[0]) for p in params)))
                         cf('  CAMLparam0();')
