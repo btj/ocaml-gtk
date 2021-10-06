@@ -1,4 +1,4 @@
-all: example0.ml.exe
+all: example0.ml.exe example0_oo.ml.exe
 
 Gtk-4.0.xml:
 	# g-ir-generate and typelibs provided by package gobject-introspection
@@ -13,6 +13,9 @@ Gtk.ml: Gtk-4.0.xml
 
 example0.ml.exe: example0.ml Gtk.ml
 	ocamlopt.opt -g -o example0.ml.exe -ccopt "-Wno-deprecated-declarations `pkg-config --cflags gtk4 gtk4-unix-print`" -cclib "`pkg-config --libs gtk4`" gobject0.ml ml_glib.c glib.ml ml_gobject0.c ml_gobject.c gobject.ml ml_gio.c gio.ml ml_gdk.c gdk.ml ml_gtk.c gtk.ml example0.ml
+
+example0_oo.ml.exe: example0_oo.ml Gtk.ml
+	ocamlopt.opt -g -o example0_oo.ml.exe -ccopt "-Wno-deprecated-declarations `pkg-config --cflags gtk4 gtk4-unix-print`" -cclib "`pkg-config --libs gtk4`" gobject0.ml ml_glib.c glib.ml ml_gobject0.c ml_gobject.c gobject.ml ml_gio.c gio.ml ml_gdk.c gdk.ml ml_gtk.c gtk.ml example0_oo.ml
 
 clean:
 	-rm ml_glib.c glib.ml ml_gobject.c gobject.ml ml_gio.c gio.ml ml_gdk.c gdk.ml ml_gtk.c gtk.ml
