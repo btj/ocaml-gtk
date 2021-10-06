@@ -16,6 +16,7 @@ t_property = "{http://www.gtk.org/introspection/core/1.0}property"
 t_signal = "{http://www.gtk.org/introspection/glib/1.0}signal"
 t_enumeration = "{http://www.gtk.org/introspection/core/1.0}enumeration"
 t_bitfield = "{http://www.gtk.org/introspection/core/1.0}bitfield"
+t_member = "{http://www.gtk.org/introspection/core/1.0}member"
 
 a_type_name = "{http://www.gtk.org/introspection/glib/1.0}type-name"
 a_identifier = "{http://www.gtk.org/introspection/c/1.0}identifier"
@@ -180,6 +181,13 @@ def process_namespace(namespace, env):
         else:
             return None
     for ns_elem in namespace:
+        if ns_elem.tag == t_bitfield:
+            ml()
+            ml('module %s_ = struct' % ns_elem.attrib['name'])
+            for bf_elem in ns_elem:
+                if bf_elem.tag == t_member:
+                    ml('  let %s = %s' % (escape_ml_keyword(bf_elem.attrib['name']), bf_elem.attrib['value']))
+            ml('end')
         if ns_elem.tag == t_class:
             nse = local_env[ns_elem.attrib['name']]
             if not nse.is_GObject:

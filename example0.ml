@@ -1,5 +1,5 @@
 let () =
-  let app = Gtk.Application_._new "org.gtk.example" 0 in
+  let app = Gtk.Application_._new "org.gtk.example" Gio.ApplicationFlags_.flags_none  in
   ignore @@ Gio.Application_.signal_connect_activate app begin fun () ->
     let window = Gtk.ApplicationWindow_._new app in
     Gtk.Window_.set_title window "Window";
