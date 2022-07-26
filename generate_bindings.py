@@ -200,6 +200,7 @@ def process_namespace(namespace, env):
             c_type_name = nse.c_type_name
             ml()
             ml('module %s_ = struct' % ns_elem.attrib['name'])
+            ml('  let upcast: [<`%s] obj -> %s = Obj.magic' % (c_type_name, nse.ml_name))
             #if first_class:
             #    first_class = False
             #    cl('class %s (self: %s) =')
