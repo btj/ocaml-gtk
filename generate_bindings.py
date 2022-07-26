@@ -72,7 +72,8 @@ class NamespaceElement:
         self.ns = ns
         self.xml = xml
         self.name = xml.attrib['name']
-        self.ml_name = escape_ml_keyword(pascal_case_to_snake_case(self.name))
+        self.ml_name0 = escape_ml_keyword(pascal_case_to_snake_case(self.name))
+        self.ml_name = self.ml_name0 + '_'
         self.qualified_name = ns.name + '.' + self.name
         c_type_name = xml.attrib.get(a_type_name, None)
         self.c_type_name = 'GParamSpec' if c_type_name == 'GParam' else c_type_name
@@ -180,6 +181,10 @@ def process_namespace(namespace, env):
                 return None
         else:
             return None
+    classes_lines = []
+    def cl(line):
+        classes_lines.append(line)
+    first_class = True
     for ns_elem in namespace:
         if ns_elem.tag == t_bitfield:
             ml()
@@ -195,6 +200,9 @@ def process_namespace(namespace, env):
             c_type_name = nse.c_type_name
             ml()
             ml('module %s_ = struct' % ns_elem.attrib['name'])
+            #if first_class:
+            #    first_class = False
+            #    cl('class %s (self: %s) =')
             for c_elem in ns_elem:
                 if c_elem.tag == t_attribute:
                     pass
