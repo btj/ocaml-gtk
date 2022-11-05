@@ -77,7 +77,7 @@ class NamespaceElement:
         self.qualified_name = ns.name + '.' + self.name
         c_type_name = xml.attrib.get(a_type_name, None)
         self.c_type_name = 'GParamSpec' if c_type_name == 'GParam' else c_type_name
-    
+
     def qualify_for(self, other_ns):
         if other_ns is self.ns:
             return self.name
@@ -176,7 +176,7 @@ def process_namespace(namespace, env):
             if ns_elem.xml.tag == t_enumeration:
                 return ('int', 'Val_int(%s)', 'int')
             elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
-                return (("" if ns_elem.ns is ns else ns_elem.ns.name.capitalize() + '.') + ns_elem.ml_name, 'Val_GObject((void *)(%s))', 'void *') # '%s *' % ns_elem.c_type_name)
+                return (("" if ns_elem.ns is ns else ns_elem.ns.name + '.') + ns_elem.ml_name, 'Val_GObject((void *)(%s))', 'void *') # '%s *' % ns_elem.c_type_name)
             else:
                 return None
         else:
@@ -188,7 +188,7 @@ def process_namespace(namespace, env):
     for ns_elem in namespace:
         if ns_elem.tag == t_bitfield:
             ml()
-            ml('module %s_ = struct' % ns_elem.attrib['name'])
+            ml('module %s = struct' % ns_elem.attrib['name'])
             for bf_elem in ns_elem:
                 if bf_elem.tag == t_member:
                     ml('  let %s = %s' % (escape_ml_keyword(bf_elem.attrib['name']), bf_elem.attrib['value']))
@@ -199,7 +199,7 @@ def process_namespace(namespace, env):
                 continue
             c_type_name = nse.c_type_name
             ml()
-            ml('module %s_ = struct' % ns_elem.attrib['name'])
+            ml('module %s = struct' % ns_elem.attrib['name'])
             ml('  let upcast: [<`%s] obj -> %s = Obj.magic' % (c_type_name, nse.ml_name))
             #if first_class:
             #    first_class = False
@@ -361,7 +361,7 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
                         cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
                         ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
                         cf()
-                        cf('%s %s(GObject *instance, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p[1][2], p[0]) for p in params)))
+                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p[1][2], p[0]) for p in params)))
                         cf('  CAMLparam0();')
                         nb_args = max(1, len(params))
                         cf('  CAMLlocalN(args, %d);' % nb_args)
