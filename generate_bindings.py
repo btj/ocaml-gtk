@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+import itertools
 
 c_functions_to_skip = {'g_io_module_load', 'g_io_module_unload'} # https://gitlab.gnome.org/GNOME/glib/-/issues/2498
 
@@ -57,6 +58,7 @@ class Namespace:
     def __init__(self, env, xml):
         self.xml = xml
         self.name = xml.attrib['name']
+        self.ml_name = self.name.lower().capitalize()
         ns_elems = {}
         for elem_xml in xml:
             name = elem_xml.attrib.get('name', None)
@@ -128,14 +130,19 @@ def process_namespace(namespace, env):
         ns_elem.is_GObject = False
         while True:
             ancestors.append(ancestor)
+            parent_name = ancestor.xml.attrib.get('parent', None)
+            ancestor.parent_name = parent_name
             if ancestor.qualified_name == "GObject.Object": # or ancestor.qualified_name == "GObject.InitiallyUnowned":
+                ancestor.parent = None
                 ns_elem.is_GObject = True
                 break
-            parent_name = ancestor.xml.attrib.get('parent', None)
             if parent_name is None:
+                ancestor.parent = None
                 print('Warning: while determining ancestry of class %s: class %s has no parent' % (ns_elem_name, ancestor.qualified_name))
                 break
+            ancestor0 = ancestor
             ancestor = ancestor.ns.local_env.get(parent_name, None)
+            ancestor0.parent = ancestor
             if ancestor is None:
                 print('Warning: incomplete ancestry of class %s due to unknown ancestor %s' % (ns_elem_name, parent_name))
                 break
@@ -181,10 +188,15 @@ def process_namespace(namespace, env):
                 return None
         else:
             return None
-    classes_lines = []
-    def cl(line):
-        classes_lines.append(line)
-    first_class = True
+    class Class:
+        def __init__(self, parent):
+            self.parent = parent
+            self.lines = []
+            self.printed = False
+    classes = {}
+    ctors_lines = []
+    def ctl(line):
+        ctors_lines.append(line)
     for ns_elem in namespace:
         if ns_elem.tag == t_bitfield:
             ml()
@@ -197,19 +209,28 @@ def process_namespace(namespace, env):
             nse = local_env[ns_elem.attrib['name']]
             if not nse.is_GObject:
                 continue
+            class_ = Class(None if nse.parent is None else nse.parent.ml_name0 if nse.parent.ns is nse.ns else None)
+            classes[nse.ml_name0] = class_
+            def cl(line):
+                class_.lines.append(line)
             c_type_name = nse.c_type_name
             ml()
             ml('module %s_ = struct' % ns_elem.attrib['name'])
-            ml('  let upcast: [<`%s] obj -> %s = Obj.magic' % (c_type_name, nse.ml_name))
-            #if first_class:
-            #    first_class = False
-            #    cl('class %s (self: %s) =')
+            ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (c_type_name, nse.ml_name))
+            cl('%s (self: %s) =' % (nse.ml_name0, nse.ml_name))
+            cl('  object')
+            if nse.parent_name is not None:
+                qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.ml_name + '.'
+                cl('    inherit %s (%s.upcast self)' % (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_'))
+            cl('  end')
+            ctl('')
+            ctl('module %s = struct' % ns_elem.attrib['name'])
             for c_elem in ns_elem:
                 if c_elem.tag == t_attribute:
                     pass
                 elif c_elem.tag == t_constructor or c_elem.tag == t_method:
                     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-                    params = [('instance', ('[>`%s] obj' % c_type_name, 'GObject_val(%s)', '%s *' % c_type_name))] if c_elem_tag == 'method' else []
+                    params = [('instance_', ('[>`%s] obj' % c_type_name, 'GObject_val(%s)', '%s *' % c_type_name))] if c_elem_tag == 'method' else []
                     throws = c_elem.attrib.get('throws', None) == '1'
                     result = None
                     skip = False
@@ -239,7 +260,7 @@ def process_namespace(namespace, env):
                                     print('Skipping %s %s of class %s: unsupported type %s of parameter %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ET.tostring(typ), ps_elem.attrib['name']))
                                     skip = True
                                     continue
-                                params.append((escape_c_keyword(ps_elem.attrib['name']), types))
+                                params.append((escape_c_keyword(ps_elem.attrib['name']), types, escape_ml_keyword(ps_elem.attrib['name'])))
                         elif m_elem.tag == t_return_value:
                             typ = None
                             types = None
@@ -273,6 +294,9 @@ def process_namespace(namespace, env):
                         cfunc = 'ml_%s_%s_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_elem.attrib['name'])
                         mlfunc = escape_ml_keyword(c_elem.attrib['name'])
                         ml('  external %s: %s -> %s = "%s"' % (mlfunc, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
+                        if c_elem_tag == 'constructor':
+                            params_text = ' '.join(p[2] for p in params) if params != [] else '()'
+                            ctl('  let %s %s = new %s (%s_.%s %s)' % (mlfunc, params_text, nse.ml_name0, nse.name, mlfunc, params_text))
                         cf()
                         cf('CAMLprim value %s(%s) {' % (cfunc, ', '.join('value %s' % p[0] for p in params)))
                         params1 = params[:5]
@@ -361,7 +385,7 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
                         cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
                         ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
                         cf()
-                        cf('%s %s(GObject *instance, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p[1][2], p[0]) for p in params)))
+                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p[1][2], p[0]) for p in params)))
                         cf('  CAMLparam0();')
                         nb_args = max(1, len(params))
                         cf('  CAMLlocalN(args, %d);' % nb_args)
@@ -377,10 +401,31 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
                         cf('  %s' % return_stmt)
                         cf('}')
                         cf()
-                        cf('CAMLprim value %s(value instance, value callback) {' % cfunc)
-                        cf('  return ml_GObject_signal_connect(instance, "%s", %s, callback);' % (c_elem.attrib['name'], handlerfunc))
+                        cf('CAMLprim value %s(value instance_, value callback) {' % cfunc)
+                        cf('  return ml_GObject_signal_connect(instance_, "%s", %s, callback);' % (c_elem.attrib['name'], handlerfunc))
                         cf('}')
             ml('end')
+            ctl('end')
+    ml()
+    is_first_class = True
+    def print_class(class_):
+        nonlocal is_first_class
+        if not class_.printed:
+            class_.printed = True
+            if class_.parent is not None:
+                print_class(classes[class_.parent])
+            if is_first_class:
+                ml('class ' + class_.lines[0])
+                is_first_class = False
+            else:
+                ml('and ' + class_.lines[0])
+            for line in itertools.islice(class_.lines, 1, None):
+                ml(line)
+    for class_ in classes.values():
+        print_class(class_)
+    ml()
+    for line in ctors_lines:
+        ml(line)
 
 def process_root(filepath):
     print('Processing %s...' % filepath)
