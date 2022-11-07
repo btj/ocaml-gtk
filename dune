@@ -1,0 +1,58 @@
+(rule
+ (targets GLib-2.0.xml)
+ (action (run g-ir-generate -o GLib-2.0.xml %{env:PREFIX=/usr/local}/girepository-1.0/GLib-2.0.typelib))
+)
+(rule
+ (targets GObject-2.0.xml)
+ (action (run g-ir-generate -o GObject-2.0.xml %{env:PREFIX=/usr/local}/girepository-1.0/GObject-2.0.typelib))
+)
+(rule
+ (targets Gdk-4.0.xml)
+ (action (run g-ir-generate -o Gdk-4.0.xml %{env:PREFIX=/usr/local}/girepository-1.0/Gdk-4.0.typelib))
+)
+(rule
+ (targets Gtk-4.0.xml)
+ (action (run g-ir-generate -o Gtk-4.0.xml %{env:PREFIX=/usr/local}/girepository-1.0/Gtk-4.0.typelib))
+)
+(rule
+ (targets Gio-2.0.xml)
+ (action (run g-ir-generate -o Gio-2.0.xml %{env:PREFIX=/usr/local}/girepository-1.0/Gio-2.0.typelib))
+)
+
+(rule
+  (deps (file generate_bindings.py) (glob_files *.xml))
+  (targets ml_GLib.c ml_GObject.c ml_Gdk.c ml_Gio.c ml_Gtk.c GLib.ml Gio.ml GObject.ml Gdk.ml Gtk.ml)
+  (action (run python3 ./generate_bindings.py)))
+
+(executable
+ (name discover)
+ (modules discover)
+ (libraries dune-configurator))
+
+(rule
+ (targets gtk4-libs.sexp gtk4-flags.sexp)
+ (action
+  (run ./discover.exe)))
+
+(library
+ (name ocamlgtk)
+ (wrapped false)
+ ; (deps (filename Gtk.ml) (filename GObject.ml) (filename gobject0.ml) (filename Gio.ml Gdk)
+ (modules Gtk GObject gobject0 Gio Gdk)
+ (flags :standard -no-strict-sequence -w -7)
+ (c_library_flags (:include gtk4-libs.sexp))
+ (foreign_stubs
+  (language c)
+  (names ml_GLib ml_GObject ml_Gdk ml_Gio ml_Gtk ml_gobject0)
+  (flags -fPIC -Wno-deprecated-declarations
+   (:include gtk4-flags.sexp) (:include gtk4-libs.sexp))
+  ))
+
+(executable (name example0)
+ (modules example0)
+ (libraries ocamlgtk)
+)
+(executable (name example0_oo)
+ (modules example0_oo)
+ (libraries ocamlgtk)
+)

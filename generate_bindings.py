@@ -83,8 +83,8 @@ class NamespaceElement:
     def ml_name0_for(self, other_ns):
         if other_ns is self.ns:
             return self.ml_name0
-        return self.ns.ml_name + '.' + self.ml_name0
-    
+        return self.ns.name + '.' + self.ml_name0
+
 namespaces = {}
 
 def process_namespace(namespace, env):
@@ -200,7 +200,7 @@ def process_namespace(namespace, env):
     for ns_elem in namespace:
         if ns_elem.tag == t_bitfield:
             ml()
-            ml('module %s_ = struct' % ns_elem.attrib['name'])
+            ml('module %s = struct' % ns_elem.attrib['name'])
             for bf_elem in ns_elem:
                 if bf_elem.tag == t_member:
                     ml('  let %s = %s' % (escape_ml_keyword(bf_elem.attrib['name']), bf_elem.attrib['value']))
@@ -220,7 +220,7 @@ def process_namespace(namespace, env):
             cl('%s (self: %s) =' % (nse.ml_name0, nse.ml_name))
             cl('  object')
             if nse.parent_name is not None:
-                qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.ml_name + '.'
+                qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.name + '.'
                 cl('    inherit %s (%s.upcast self)' % (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_'))
             cl('    method as_%s = self' % c_type_name)
             ctl('')
