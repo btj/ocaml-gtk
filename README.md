@@ -6,7 +6,6 @@ Experimental bindings to GTK 4.0 for OCaml.
 
 Generates direct OCaml C bindings using GObject introspection data
 
-* No object-oriented wrappers.
 * No enumeration / constants mapping
 * No inline docs
 
