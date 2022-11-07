@@ -17,7 +17,9 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends libgtk-4-dev gobject-introspection gir1.2-glib-2.0 gir1.2-gtk-4.0 bubblewrap
     - name: Install Dune
-      run: opam install -y dune dune-configurator
+      run: |
+        opam init
+        opam install -y dune dune-configurator
     - name: Build ocaml-gtk
       run: |
         eval `opam env`
