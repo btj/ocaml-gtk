@@ -10,11 +10,11 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Install required Ubuntu packages
-      run:
+      run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends libgtk-4-dev gobject-introspection gir1.2-glib-2.0 gir1.2-gtk-4.0
     - name: Install OPAM
-      run:
+      run: |
         bash -c "sh <(curl -fsSL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)"
         opam install dune dune-configurator
     - name: Build ocaml-gtk
