@@ -15,7 +15,7 @@ jobs:
         sudo apt-get install -y --no-install-recommends libgtk-4-dev gobject-introspection gir1.2-glib-2.0 gir1.2-gtk-4.0
     - name: Install OPAM
       run: |
-        bash -c "sh <(curl -fsSL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)"
+        echo '' | bash -c "sh <(curl -fsSL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)"
         opam install dune dune-configurator
     - name: Build ocaml-gtk
       run: dune build
