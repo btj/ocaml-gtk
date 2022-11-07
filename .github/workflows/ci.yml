@@ -19,6 +19,8 @@ jobs:
         opam init
         opam install -y dune dune-configurator
     - name: Build ocaml-gtk
-      run: dune build
+      run: |
+        eval `opam env`
+        dune build
       env:
         PREFIX: /usr/lib/x86_64-linux-gnu
