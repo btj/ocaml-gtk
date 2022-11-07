@@ -39,16 +39,20 @@
  (wrapped false)
  ; (deps (filename Gtk.ml) (filename GObject.ml) (filename gobject0.ml) (filename Gio.ml Gdk)
  (modules Gtk GObject gobject0 Gio Gdk)
- (flags :standard -no-strict-sequence)
+ (flags :standard -no-strict-sequence -w -7)
  (c_library_flags (:include gtk4-libs.sexp))
  (foreign_stubs
   (language c)
   (names ml_GLib ml_GObject ml_Gdk ml_Gio ml_Gtk ml_gobject0)
-  (flags -fPIC
+  (flags -fPIC -Wno-deprecated-declarations
    (:include gtk4-flags.sexp) (:include gtk4-libs.sexp))
   ))
 
 (executable (name example0)
  (modules example0)
+ (libraries ocamlgtk)
+)
+(executable (name example0_oo)
+ (modules example0_oo)
  (libraries ocamlgtk)
 )
