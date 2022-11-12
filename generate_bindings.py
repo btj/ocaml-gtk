@@ -195,6 +195,7 @@ def process_namespace(namespace, env):
             self.printed = False
     classes = {}
     ctors_lines = []
+    default_ctors_lines = []
     def ctl(line):
         ctors_lines.append(line)
     for ns_elem in namespace:
@@ -298,6 +299,8 @@ def process_namespace(namespace, env):
                             params_text = ' '.join('(%s: %s)' % (p[2], p[1][3]) for p in params) if params != [] else '()'
                             args_text = ' '.join(p[1][4] % p[2] for p in params) if params != [] else '()'
                             ctl('  let %s %s = new %s (%s_.%s %s)' % (mlfunc, params_text, nse.ml_name0, nse.name, mlfunc, args_text))
+                            if c_elem.attrib['name'] == 'new':
+                                default_ctors_lines.append('let %s %s = new %s (%s_.%s %s)' % (nse.ml_name0, params_text, nse.ml_name0, nse.name, mlfunc, args_text))
                         else:
                             mparams = params[1:]
                             method_name = mlfunc + '_' if ns.name == 'Gtk' and nse.name == 'Widget' and mlfunc == 'get_settings' else mlfunc # To work around a weird OCaml compiler error message
@@ -437,6 +440,10 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
     ml()
     for line in ctors_lines:
         ml(line)
+    if default_ctors_lines != []:
+        ml()
+        for line in default_ctors_lines:
+            ml(line)
 
 def process_root(filepath):
     print('Processing %s...' % filepath)

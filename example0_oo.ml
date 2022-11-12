@@ -1,12 +1,12 @@
 let () =
-  let app = Gtk.Application._new "org.gtk.example" Gio.ApplicationFlags.flags_none in
+  let app = Gtk.application "org.gtk.example" Gio.ApplicationFlags.flags_none in
   ignore @@ app#signal_connect_activate begin fun () ->
-    let window = Gtk.ApplicationWindow._new app in
+    let window = Gtk.application_window app in
     window#set_title "Window";
     window#set_default_size 200 200;
     window#show;
 
-    let pack = Gtk.Box._new 0 0 in
+    let pack = Gtk.box Gtk.Orientation.horizontal 0 in
     let button = Gtk.Button.new_with_label "Click Me!" in
     pack#append (button :> Gtk.widget) ;
     window#set_child (pack :> Gtk.widget);
