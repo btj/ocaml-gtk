@@ -20,5 +20,5 @@ jobs:
       run: sudo -u opam opam install -y dune dune-configurator
     - name: Build ocaml-gtk
       run: |
-        echo 'eval `opam env` && PREFIX=/usr/lib/x86_64-linux-gnu dune build' > build.sh
+        echo 'cd /home/opam && eval `opam env` && PREFIX=/usr/lib/x86_64-linux-gnu dune build' > build.sh
         sudo -u opam sh build.sh
