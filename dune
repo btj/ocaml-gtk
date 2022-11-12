@@ -45,7 +45,7 @@
   (language c)
   (names ml_GLib ml_GObject ml_Gdk ml_Gio ml_Gtk ml_gobject0)
   (flags -fPIC -Wno-deprecated-declarations
-   (:include gtk4-flags.sexp) (:include gtk4-libs.sexp))
+   (:include gtk4-flags.sexp))
   ))
 
 (executable (name example0)
