@@ -198,7 +198,7 @@ def process_namespace(namespace, env):
     def ctl(line):
         ctors_lines.append(line)
     for ns_elem in namespace:
-        if ns_elem.tag == t_bitfield:
+        if ns_elem.tag == t_bitfield or ns_elem.tag == t_enumeration:
             ml()
             ml('module %s = struct' % ns_elem.attrib['name'])
             for bf_elem in ns_elem:
