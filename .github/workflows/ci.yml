@@ -7,19 +7,12 @@ jobs:
 
     runs-on: ubuntu-22.04
     container:
-      image: ocaml/opam:ubuntu-22.04-ocaml-4.14
+      image: ghcr.io/btj/ocaml-gtk-build-env:main
       options: --user root
       
     steps:
     - uses: actions/checkout@v3
-    - name: Install required Ubuntu packages
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends libgtk-4-dev gobject-introspection gir1.2-glib-2.0 gir1.2-gtk-4.0 bubblewrap
-    - name: Install Dune
-      run: sudo -u opam opam install -y dune dune-configurator
     - name: Build ocaml-gtk
       run: |
         chmod ugo+w .
-        echo 'eval `opam env` && PREFIX=/usr/lib/x86_64-linux-gnu dune build' > build.sh
-        sudo -u opam sh build.sh
+        PREFIX=/usr/lib/x86_64-linux-gnu dune build
