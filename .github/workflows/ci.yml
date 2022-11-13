@@ -15,4 +15,5 @@ jobs:
     - name: Build ocaml-gtk
       run: |
         chmod ugo+w .
+        eval `sudo -u opam opam env`
         PREFIX=/usr/lib/x86_64-linux-gnu dune build
