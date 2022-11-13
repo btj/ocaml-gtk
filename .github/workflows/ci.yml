@@ -7,7 +7,7 @@ jobs:
 
     runs-on: ubuntu-22.04
     container:
-      image: ghcr.io/btj/ocaml-gtk-build-env:main
+      image: ghcr.io/btj/ocaml-gtk-build-env@sha256:ffcddc2e7bada4eb7c38b32f527f8c601d1991ffcead529498933b869d59fdb3
       options: --user root
       
     steps:
