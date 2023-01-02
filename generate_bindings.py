@@ -87,6 +87,51 @@ class NamespaceElement:
 
 namespaces = {}
 
+
+_C_HEADERS = '''\
+#define G_SETTINGS_ENABLE_BACKEND
+#include <gio/gsettingsbackend.h>
+#include <gio/gunixconnection.h>
+#include <gio/gunixcredentialsmessage.h>
+#include <gio/gunixfdlist.h>
+#include <gio/gunixfdmessage.h>
+#include <gio/gunixinputstream.h>
+#include <gio/gunixmounts.h>
+#include <gio/gunixoutputstream.h>
+#include <gio/gunixsocketaddress.h>
+#include <gtk/gtk.h>
+#include <gtk/gtkunixprint.h>
+#define CAML_NAME_SPACE
+#include <caml/mlvalues.h>
+#include <caml/memory.h>
+#include <caml/callback.h>
+#include <caml/alloc.h>
+#include <caml/fail.h>
+#include "ml_gobject0.h"\
+'''
+
+
+_GIO_APPLICATION_RUN = '''
+CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
+  CAMLparam2(application, argvValue);
+  int argc = Wosize_val(argvValue);
+  char **argv = malloc(argc * sizeof(char *));
+  if (argv == 0) abort();
+  for (int i = 0; i < argc; i++)
+    argv[i] = strdup(String_val(Field(argvValue, i)));
+
+  callbacks_allowed = true;
+  int result = g_application_run(GObject_val(application), argc, argv);
+  callbacks_allowed = false;
+
+  for (int i = 0; i < argc; i++)
+    free(argv[i]);
+  free(argv);
+  CAMLreturn(Val_int(result));
+}
+'''
+
+
 def process_namespace(namespace, env):
     namespace_name = namespace.attrib['name']
     ml_file = open(namespace.attrib['name'] + '.ml', 'w')
@@ -99,25 +144,7 @@ def process_namespace(namespace, env):
     ml()
     ml('open Gobject0')
     ml()
-    cf('#define G_SETTINGS_ENABLE_BACKEND')
-    cf('#include <gio/gsettingsbackend.h>')
-    cf('#include <gio/gunixconnection.h>')
-    cf('#include <gio/gunixcredentialsmessage.h>')
-    cf('#include <gio/gunixfdlist.h>')
-    cf('#include <gio/gunixfdmessage.h>')
-    cf('#include <gio/gunixinputstream.h>')
-    cf('#include <gio/gunixmounts.h>')
-    cf('#include <gio/gunixoutputstream.h>')
-    cf('#include <gio/gunixsocketaddress.h>')
-    cf('#include <gtk/gtk.h>')
-    cf('#include <gtk/gtkunixprint.h>')
-    cf('#define CAML_NAME_SPACE')
-    cf('#include <caml/mlvalues.h>')
-    cf('#include <caml/memory.h>')
-    cf('#include <caml/callback.h>')
-    cf('#include <caml/alloc.h>')
-    cf('#include <caml/fail.h>')
-    cf('#include "ml_gobject0.h"')
+    cf(_C_HEADERS)
     ns = Namespace(env, namespace)
     local_env = ns.local_env
     namespaces[namespace_name] = ns
@@ -335,25 +362,7 @@ def process_namespace(namespace, env):
                     elif ns.name == 'Gio' and ns_elem.attrib['name'] == 'Application' and c_elem.attrib['name'] == 'run':
                         ml('  external run: [>`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
                         cl('    method run argv = Application_.run self argv')
-                        cf('''
-CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
-  CAMLparam2(application, argvValue);
-  int argc = Wosize_val(argvValue);
-  char **argv = malloc(argc * sizeof(char *));
-  if (argv == 0) abort();
-  for (int i = 0; i < argc; i++)
-    argv[i] = strdup(String_val(Field(argvValue, i)));
-
-  callbacks_allowed = true;
-  int result = g_application_run(GObject_val(application), argc, argv);
-  callbacks_allowed = false;
-
-  for (int i = 0; i < argc; i++)
-    free(argv[i]);
-  free(argv);
-  CAMLreturn(Val_int(result));
-}
-''')
+                        cf(_GIO_APPLICATION_RUN)
                 elif c_elem.tag == t_signal:
                     params = []
                     result = None
