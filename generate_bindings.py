@@ -225,6 +225,9 @@ def process_namespace(namespace, env):
     default_ctors_lines = []
     def ctl(line):
         ctors_lines.append(line)
+    def print_skip(c_elem, ns_elem, reason):
+        skip = 'Skipping %s %s of class %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name']) 
+        print('%s: %s' % (skip, reason))
     for ns_elem in namespace:
         if ns_elem.tag == t_bitfield or ns_elem.tag == t_enumeration:
             ml()
@@ -265,13 +268,14 @@ def process_namespace(namespace, env):
                     for m_elem in c_elem:
                         if m_elem.tag == t_parameters:
                             for ps_elem in m_elem:
+                                ps_name = ps_elem.attrib['name']
                                 assert ps_elem.tag == t_parameter
                                 if ps_elem.attrib.get('transfer-ownership', None) != 'none':
-                                    print('Skipping %s %s of class %s: missing transfer-ownership="none" attribute for parameter %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ps_elem.attrib['name']))
+                                    print_skip(c_elem, ns_elem, 'missing transfer-ownership="none" attribute for parameter %s' % ps_name)
                                     skip = True
                                     continue
                                 if 'direction' in ps_elem.attrib:
-                                    print('Skipping %s %s of class %s: explicit "direction" attribute for parameter %s not yet supported' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ps_elem.attrib['name']))
+                                    print_skip(c_elem, ns_elem, 'explicit "direction" attribute for parameter %s not yet supported' % ps_name)
                                     skip = True
                                     continue
                                 typ = None
@@ -280,12 +284,12 @@ def process_namespace(namespace, env):
                                     if p_elem.tag == t_type:
                                         typ = p_elem
                                 if typ == None:
-                                    print('Skipping %s %s of class %s: no type specified for parameter %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ps_elem.attrib['name']))
+                                    print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
                                     skip = True
                                     continue
                                 types = ml_to_c_type(typ)
                                 if types == None:
-                                    print('Skipping %s %s of class %s: unsupported type %s of parameter %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ET.tostring(typ), ps_elem.attrib['name']))
+                                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
                                     skip = True
                                     continue
                                 params.append((escape_c_keyword(ps_elem.attrib['name']), types, escape_ml_keyword(ps_elem.attrib['name'])))
@@ -303,12 +307,12 @@ def process_namespace(namespace, env):
                             else:
                                 types = c_to_ml_type(typ)
                             if types == None:
-                                print('Skipping %s %s of class %s: unsupported return type %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'], ET.tostring(typ)))
+                                print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
                                 skip = True
                             result = types
                     if len(params) > 5:
                         # Skip for now; requires separate C functions for the bytecode runtime and the native code runtime
-                        print('Skipping %s %s of class %s: has more than 5 parameters' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name']))
+                        print_skip(c_elem, ns_elem, 'has more than 5 parameters')
                         skip = True
                     if c_elem.attrib[a_identifier] in c_functions_to_skip:
                         skip = True
@@ -371,18 +375,19 @@ def process_namespace(namespace, env):
                         if s_elem.tag == t_parameters:
                             for ps_elem in s_elem:
                                 assert ps_elem.tag == t_parameter
+                                ps_name = ps_elem.attrib['name']
                                 typ = None
                                 types = None
                                 for p_elem in ps_elem:
                                     if p_elem.tag == t_type:
                                         typ = p_elem
                                 if typ == None:
-                                    print('Skipping signal %s of class %s: no type specified for parameter %s' % (c_elem.attrib['name'], ns_elem.attrib['name'], ps_elem.attrib['name']))
+                                    print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
                                     skip = True
                                     continue
                                 types = c_to_ml_type(typ)
                                 if types == None:
-                                    print('Skipping signal %s of class %s: unsupported type %s of parameter %s' % (c_elem.attrib['name'], ns_elem.attrib['name'], ET.tostring(typ), ps_elem.attrib['name']))
+                                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
                                     skip = True
                                     continue
                                 params.append((escape_c_keyword(ps_elem.attrib['name']), types, escape_ml_keyword(ps_elem.attrib['name'])))
@@ -397,7 +402,7 @@ def process_namespace(namespace, env):
                             else:
                                 types = ml_to_c_type(typ)
                             if types == None:
-                                print('Skipping signal %s of class %s: unsupported return type %s' % (c_elem.attrib['name'], ns_elem.attrib['name'], ET.tostring(typ)))
+                                print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
                                 skip = True
                             result = types
                     if not skip:
