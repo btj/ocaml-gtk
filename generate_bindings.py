@@ -422,7 +422,7 @@ def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
             result = types
     return params, result
 
-namespaces = {}
+NAMESPACES = {}
 
 def process_namespace(namespace, env):
     namespace_name = namespace.attrib['name']
@@ -439,7 +439,7 @@ def process_namespace(namespace, env):
     cf(_C_HEADERS)
     ns = Namespace(env, namespace)
     local_env = ns.local_env
-    namespaces[namespace_name] = ns
+    NAMESPACES[namespace_name] = ns
     output_gobject_types(ns, ml)
     classes = {}
     ctors_lines = []
@@ -584,7 +584,7 @@ def process_root(filepath):
     for e in root:
         if e.tag == t_include:
             name = e.attrib['name']
-            ns = namespaces.get(name, None)
+            ns = NAMESPACES.get(name, None)
             if ns is None:
                 print('%s: ignoring include of %s: no such namespace' % (filepath, name))
                 continue
