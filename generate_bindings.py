@@ -304,7 +304,7 @@ def c_to_ml_type(typ, ns, local_env):
 
 def print_skip(c_elem, ns_elem, reason):
     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-    skip = 'Skipping %s %s of class %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name']) 
+    skip = 'Skipping %s %s of class %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'])
     print('%s: %s' % (skip, reason))
 
 def output_gobject_types(ns, ml):
@@ -422,6 +422,33 @@ def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
             result = types
     return params, result
 
+def output_method_c_code(c_elem, c_func, params, result, cf):
+    cf()
+    cf('CAMLprim value %s(%s) {' % (c_func, ', '.join('value %s' % p.c_name for p in params.params)))
+    params1 = params.params[:5]
+    params2 = params.params[5:]
+    cf('  CAMLparam%d(%s);' % (len(params1), ', '.join(p.c_name for p in params1)))
+    while params2 != []:
+        params2_1 = params2[:5]
+        params2 = params2[5:]
+        cf('  CAMLxparam%d(%s);' % (len(params2_1), ', '.join(p.c_name for p in params2_1)))
+    throws = c_elem.attrib.get('throws', None) == '1'
+    if throws:
+        cf('  CAMLlocal1(exn_msg);');
+        cf('  GError *err = NULL;')
+    args = ', '.join([p.c_value for p in params.params] + (['&err'] if throws else []))
+    call = '%s(%s)' % (c_elem.attrib[a_identifier], args)
+    if result.ml_type == 'unit':
+        cf('  %s;' % call)
+        ml_result = 'Val_unit'
+    else:
+        cf('  %s result = %s;' % (result.c_type, call))
+        ml_result = result.as_ml_value % 'result'
+    if throws:
+        cf('  if (err) { exn_msg = caml_copy_string(err->message); g_error_free(err); caml_failwith_value(exn_msg); }')
+    cf('  CAMLreturn(%s);' % ml_result)
+    cf('}')
+
 def output_signal_c_code(c_elem, c_func, handler_func, params, result, cf):
     cf()
     cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result.c_type, handler_func, params.c_params()))
@@ -510,61 +537,38 @@ def process_namespace(namespace, env):
                     pass
                 elif c_elem.tag == t_constructor or c_elem.tag == t_method:
                     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-                    throws = c_elem.attrib.get('throws', None) == '1'
                     params, result = get_method_params(c_elem, c_type_name, ns_elem, ns, local_env)
                     if params:
                         if c_elem_tag == 'constructor':
                             expected_result = Types(nse.ml_name, 'Val_GObject((void *)(%s))', 'void *', None, None)
                             if result != expected_result:
                                 if result.ml_type not in ['widget', 'Gtk.widget']:
-                                    print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' % (c_elem.attrib['name'], ns.name + '.' + ns_elem.attrib['name']))
+                                    print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' %
+                                          (c_elem.attrib['name'], ns.name + '.' + ns_elem.attrib['name']))
                                 result = expected_result
-                        cfunc = 'ml_%s_%s_%s' % (namespace_name, ns_elem.attrib['name'], c_elem.attrib['name'])
-                        mlfunc = escape_ml_keyword(c_elem.attrib['name'])
-                        ml('  external %s: %s -> %s = "%s"' % (mlfunc, params.method_types(), result.ml_type, cfunc))
+                        c_func = 'ml_%s_%s_%s' % (namespace_name, ns_elem.attrib['name'], c_elem.attrib['name'])
+                        ml_func = escape_ml_keyword(c_elem.attrib['name'])
+                        ml('  external %s: %s -> %s = "%s"' % (ml_func, params.method_types(), result.ml_type, c_func))
                         if c_elem_tag == 'constructor':
                             params_text = params.ctor_params()
                             args_text = params.ctor_args()
-                            ctl('  let %s %s = new %s (%s_.%s %s)' % (mlfunc, params_text, nse.ml_name0, nse.name, mlfunc, args_text))
+                            ctl('  let %s %s = new %s (%s_.%s %s)' % (ml_func, params_text, nse.ml_name0, nse.name, ml_func, args_text))
                             if c_elem.attrib['name'] == 'new':
                                 ctor = 'let %s %s = new %s (%s_.%s %s)' % (
-                                    nse.ml_name0, params_text, nse.ml_name0, nse.name, mlfunc, args_text)
+                                    nse.ml_name0, params_text, nse.ml_name0, nse.name, ml_func, args_text)
                                 default_ctors_lines.append(ctor)
                         else:
                             mparams = params.drop_first()
-                            if ns.name == 'Gtk' and nse.name == 'Widget' and mlfunc == 'get_settings':
+                            if ns.name == 'Gtk' and nse.name == 'Widget' and ml_func == 'get_settings':
                                 # To work around a weird OCaml compiler error message
-                                method_name = mlfunc + '_'
+                                method_name = ml_func + '_'
                             else:
-                                method_name = mlfunc
+                                method_name = ml_func
                             params_text = mparams.method_params()
                             args_text = mparams.method_args()
-                            body = result.unwrap % ('%s_.%s self%s' % (nse.name, mlfunc, args_text))
+                            body = result.unwrap % ('%s_.%s self%s' % (nse.name, ml_func, args_text))
                             cl('    method %s%s = %s' % (method_name, params_text, body))
-                        cf()
-                        cf('CAMLprim value %s(%s) {' % (cfunc, ', '.join('value %s' % p.c_name for p in params.params)))
-                        params1 = params.params[:5]
-                        params2 = params.params[5:]
-                        cf('  CAMLparam%d(%s);' % (len(params1), ', '.join(p.c_name for p in params1)))
-                        while params2 != []:
-                            params2_1 = params2[:5]
-                            params2 = params2[5:]
-                            cf('  CAMLxparam%d(%s);' % (len(params2_1), ', '.join(p.c_name for p in params2_1)))
-                        if throws:
-                            cf('  CAMLlocal1(exn_msg);');
-                            cf('  GError *err = NULL;')
-                        args = ', '.join([p.c_value for p in params.params] + (['&err'] if throws else []))
-                        call = '%s(%s)' % (c_elem.attrib[a_identifier], args)
-                        if result.ml_type == 'unit':
-                            cf('  %s;' % call)
-                            ml_result = 'Val_unit'
-                        else:
-                            cf('  %s result = %s;' % (result.c_type, call))
-                            ml_result = result.as_ml_value % 'result'
-                        if throws:
-                            cf('  if (err) { exn_msg = caml_copy_string(err->message); g_error_free(err); caml_failwith_value(exn_msg); }')
-                        cf('  CAMLreturn(%s);' % ml_result)
-                        cf('}')
+                        output_method_c_code(c_elem, c_func, params, result, cf)
                     elif ns.name == 'Gio' and ns_elem.attrib['name'] == 'Application' and c_elem.attrib['name'] == 'run':
                         ml('  external run: [>`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
                         cl('    method run argv = Application_.run self argv')
