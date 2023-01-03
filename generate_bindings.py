@@ -68,7 +68,8 @@ class Namespace:
                 ns_elems[name] = ns_elem
         self.elems = ns_elems
         self.local_env = env | ns_elems
-        self.global_env = env | dict((self.name + '.' + ns_elem_name, ns_elem) for ns_elem_name, ns_elem in ns_elems.items())
+        self.global_env = env | dict((self.name + '.' + ns_elem_name, ns_elem)
+                                     for ns_elem_name, ns_elem in ns_elems.items())
 
 class NamespaceElement:
     def __init__(self, ns, xml):
@@ -108,6 +109,10 @@ class Param:
     @property
     def ml_arg(self):
         return self.types.unwrap % self.ml_name
+
+    @property
+    def c_typed_param(self):
+        return '%s %s' % (self.types.c_type, self.c_name)
 
     @property
     def c_value(self):
@@ -177,6 +182,9 @@ class Params:
             return ['Val_unit']
         else:
             return [p.c_value for p in self.params]
+
+    def c_params(self):
+        return ''.join('%s %s, ' % (p.types.c_type, p.c_name) for p in self.params)
 
     def drop_first(self):
         p = Params()
@@ -383,7 +391,6 @@ def get_method_params(c_elem, c_type_name, ns_elem, ns, local_env):
         return None, None
     return params, result
 
-
 def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
     params = Params()
     result = None
@@ -458,7 +465,10 @@ def process_namespace(namespace, env):
             nse = local_env[ns_elem.attrib['name']]
             if not nse.is_GObject:
                 continue
-            class_ = Class(None if nse.parent is None else nse.parent.ml_name0 if nse.parent.ns is nse.ns else None)
+            if nse.parent and nse.parent.ns is nse.ns:
+                class_ = Class(nse.parent.ml_name0)
+            else:
+                class_ = Class(None)
             classes[nse.ml_name0] = class_
             def cl(line):
                 class_.lines.append(line)
@@ -470,7 +480,8 @@ def process_namespace(namespace, env):
             cl('  object')
             if nse.parent_name is not None:
                 qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.name + '.'
-                cl('    inherit %s (%s.upcast self)' % (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_'))
+                cl('    inherit %s (%s.upcast self)' %
+                   (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_'))
             cl('    method as_%s = self' % c_type_name)
             ctl('')
             ctl('module %s = struct' % ns_elem.attrib['name'])
@@ -496,10 +507,16 @@ def process_namespace(namespace, env):
                             args_text = params.ctor_args()
                             ctl('  let %s %s = new %s (%s_.%s %s)' % (mlfunc, params_text, nse.ml_name0, nse.name, mlfunc, args_text))
                             if c_elem.attrib['name'] == 'new':
-                                default_ctors_lines.append('let %s %s = new %s (%s_.%s %s)' % (nse.ml_name0, params_text, nse.ml_name0, nse.name, mlfunc, args_text))
+                                ctor = 'let %s %s = new %s (%s_.%s %s)' % (
+                                    nse.ml_name0, params_text, nse.ml_name0, nse.name, mlfunc, args_text)
+                                default_ctors_lines.append(ctor)
                         else:
                             mparams = params.drop_first()
-                            method_name = mlfunc + '_' if ns.name == 'Gtk' and nse.name == 'Widget' and mlfunc == 'get_settings' else mlfunc # To work around a weird OCaml compiler error message
+                            if ns.name == 'Gtk' and nse.name == 'Widget' and mlfunc == 'get_settings':
+                                # To work around a weird OCaml compiler error message
+                                method_name = mlfunc + '_'
+                            else:
+                                method_name = mlfunc
                             params_text = mparams.method_params()
                             args_text = mparams.method_args()
                             body = result.unwrap % ('%s_.%s self%s' % (nse.name, mlfunc, args_text))
@@ -536,12 +553,17 @@ def process_namespace(namespace, env):
                     params, result = get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env)
                     if params:
                         c_name = c_elem.attrib['name'].replace('-', '_')
-                        handlerfunc = 'ml_%s_%s_signal_handler_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
-                        cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
-                        ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, params.method_types(), result.ml_type, cfunc))
-                        cl('    method signal_connect_%s (callback: %s -> %s) = %s_.signal_connect_%s self (fun %s -> %s)' % (c_name, params.signal_types(), result.oo_type, nse.name, c_name, params.callback_args(), result.unwrap % ('(callback %s)' % params.callback_ret_args())))
+                        prefix = 'ml_%s_%s' % (namespace.attrib['name'], ns_elem.attrib['name'])
+                        handlerfunc = '%s_signal_handler_%s' % (prefix, c_name)
+                        cfunc = '%s_signal_connect_%s' % (prefix, c_name)
+                        ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' %
+                           (c_name, nse.c_type_name, params.method_types(), result.ml_type, cfunc))
+                        res = result.unwrap % ('(callback %s)' % params.callback_ret_args())
+                        signal_fn = '(fun %s -> %s)' % (params.callback_args(), res)
+                        cl('    method signal_connect_%s (callback: %s -> %s) = %s_.signal_connect_%s self %s' %
+                           (c_name, params.signal_types(), result.oo_type, nse.name, c_name, signal_fn))
                         cf()
-                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result.c_type, handlerfunc, ''.join('%s %s, ' % (p.types.c_type, p.c_name) for p in params.params)))
+                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result.c_type, handlerfunc, params.c_params()))
                         cf('  CAMLparam0();')
                         nb_args = max(1, len(params.params))
                         cf('  CAMLlocalN(args, %d);' % nb_args)
@@ -550,7 +572,12 @@ def process_namespace(namespace, env):
                         callback_args = params.c_callback_args()
                         for i in range(nb_args):
                             cf('  args[%d] = %s;' % (i, callback_args[i]))
-                        result_decl, result_conv, return_stmt = (';', '%s', 'CAMLreturn0;') if result.ml_type == 'unit' else ('%s result = ' % result.c_type, result.as_ml_value, 'CAMLreturnT(%s, result);' % result.c_type)
+                        if result.ml_type == 'unit':
+                            result_decl, result_conv, return_stmt = (';', '%s', 'CAMLreturn0;')
+                        else:
+                            result_decl = '%s result = ' % result.c_type
+                            result_conv = result.as_ml_value
+                            return_stmt = 'CAMLreturnT(%s, result);' % result.c_type
                         callback = 'caml_callbackN(*callbackCell, %d, args)' % nb_args
                         cf('  %s%s;' % (result_decl, result_conv % callback))
                         cf('  callbacks_allowed = true;')
