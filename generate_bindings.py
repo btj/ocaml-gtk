@@ -328,6 +328,99 @@ def output_gobject_types(ns, ml):
             ml('type %s = [%s] obj' % (ns_elem.ml_name,
                 '|'.join('`' + a.c_type_name for a in ancestors)))
 
+def get_method_params(c_elem, c_type_name, ns_elem, ns, local_env):
+    params = Params()
+    c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
+    if c_elem_tag == 'method':
+        params.append(CMethodParam(c_type_name))
+    result = None
+    for m_elem in c_elem:
+        if m_elem.tag == t_parameters:
+            for ps_elem in m_elem:
+                ps_name = ps_elem.attrib['name']
+                assert ps_elem.tag == t_parameter
+                if ps_elem.attrib.get('transfer-ownership', None) != 'none':
+                    print_skip(c_elem, ns_elem, 'missing transfer-ownership="none" attribute for parameter %s' % ps_name)
+                    return None, None
+                if 'direction' in ps_elem.attrib:
+                    print_skip(c_elem, ns_elem, 'explicit "direction" attribute for parameter %s not yet supported' % ps_name)
+                    return None, None
+                typ = None
+                types = None
+                for p_elem in ps_elem:
+                    if p_elem.tag == t_type:
+                        typ = p_elem
+                if typ == None:
+                    print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
+                    return None, None
+                types = ml_to_c_type(typ, ns, local_env)
+                if types == None:
+                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
+                    return None, None
+                params.append(Param(ps_elem, types))
+        elif m_elem.tag == t_return_value:
+            typ = None
+            types = None
+            for rv_elem in m_elem:
+                if rv_elem.tag == t_type:
+                    typ = rv_elem
+            if typ == None:
+                types = None
+                typ = rv_elem
+            elif typ.attrib['name'] == 'none':
+                types = Types('unit', 'Val_unit', None, 'unit', '%s')
+            else:
+                types = c_to_ml_type(typ, ns, local_env)
+            if types == None:
+                print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
+                return None, None
+            result = types
+    if len(params.params) > 5:
+        # Skip for now; requires separate C functions for the bytecode runtime and the native code runtime
+        print_skip(c_elem, ns_elem, 'has more than 5 parameters')
+        return None, None
+    if c_elem.attrib[a_identifier] in c_functions_to_skip:
+        return None, None
+    return params, result
+
+
+def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
+    params = Params()
+    result = None
+    skip = False
+    for s_elem in c_elem:
+        if s_elem.tag == t_parameters:
+            for ps_elem in s_elem:
+                assert ps_elem.tag == t_parameter
+                ps_name = ps_elem.attrib['name']
+                typ = None
+                types = None
+                for p_elem in ps_elem:
+                    if p_elem.tag == t_type:
+                        typ = p_elem
+                if typ == None:
+                    print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
+                    return None, None
+                types = c_to_ml_type(typ, ns, local_env)
+                if types == None:
+                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
+                    return None, None
+                params.append(Param(ps_elem, types))
+        elif s_elem.tag == t_return_value:
+            typ = None
+            types = None
+            for rv_elem in s_elem:
+                if rv_elem.tag == t_type:
+                    typ = rv_elem
+            if typ.attrib['name'] == 'none':
+                types = Types('unit', '', 'void', 'unit', '%s')
+            else:
+                types = ml_to_c_type(typ, ns, local_env)
+            if types == None:
+                print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
+                return None, None
+            result = types
+    return params, result
 
 namespaces = {}
 
@@ -386,64 +479,9 @@ def process_namespace(namespace, env):
                     pass
                 elif c_elem.tag == t_constructor or c_elem.tag == t_method:
                     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-                    params = Params()
-                    if c_elem_tag == 'method':
-                        params.append(CMethodParam(c_type_name))
                     throws = c_elem.attrib.get('throws', None) == '1'
-                    result = None
-                    skip = False
-                    for m_elem in c_elem:
-                        if m_elem.tag == t_parameters:
-                            for ps_elem in m_elem:
-                                ps_name = ps_elem.attrib['name']
-                                assert ps_elem.tag == t_parameter
-                                if ps_elem.attrib.get('transfer-ownership', None) != 'none':
-                                    print_skip(c_elem, ns_elem, 'missing transfer-ownership="none" attribute for parameter %s' % ps_name)
-                                    skip = True
-                                    continue
-                                if 'direction' in ps_elem.attrib:
-                                    print_skip(c_elem, ns_elem, 'explicit "direction" attribute for parameter %s not yet supported' % ps_name)
-                                    skip = True
-                                    continue
-                                typ = None
-                                types = None
-                                for p_elem in ps_elem:
-                                    if p_elem.tag == t_type:
-                                        typ = p_elem
-                                if typ == None:
-                                    print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
-                                    skip = True
-                                    continue
-                                types = ml_to_c_type(typ, ns, local_env)
-                                if types == None:
-                                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
-                                    skip = True
-                                    continue
-                                params.append(Param(ps_elem, types))
-                        elif m_elem.tag == t_return_value:
-                            typ = None
-                            types = None
-                            for rv_elem in m_elem:
-                                if rv_elem.tag == t_type:
-                                    typ = rv_elem
-                            if typ == None:
-                                types = None
-                                typ = rv_elem
-                            elif typ.attrib['name'] == 'none':
-                                types = Types('unit', 'Val_unit', None, 'unit', '%s')
-                            else:
-                                types = c_to_ml_type(typ, ns, local_env)
-                            if types == None:
-                                print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
-                                skip = True
-                            result = types
-                    if len(params.params) > 5:
-                        # Skip for now; requires separate C functions for the bytecode runtime and the native code runtime
-                        print_skip(c_elem, ns_elem, 'has more than 5 parameters')
-                        skip = True
-                    if c_elem.attrib[a_identifier] in c_functions_to_skip:
-                        skip = True
-                    if not skip:
+                    params, result = get_method_params(c_elem, c_type_name, ns_elem, ns, local_env)
+                    if params:
                         if c_elem_tag == 'constructor':
                             expected_result = Types(nse.ml_name, 'Val_GObject((void *)(%s))', 'void *', None, None)
                             if result != expected_result:
@@ -495,44 +533,8 @@ def process_namespace(namespace, env):
                         cl('    method run argv = Application_.run self argv')
                         cf(_GIO_APPLICATION_RUN)
                 elif c_elem.tag == t_signal:
-                    params = Params()
-                    result = None
-                    skip = False
-                    for s_elem in c_elem:
-                        if s_elem.tag == t_parameters:
-                            for ps_elem in s_elem:
-                                assert ps_elem.tag == t_parameter
-                                ps_name = ps_elem.attrib['name']
-                                typ = None
-                                types = None
-                                for p_elem in ps_elem:
-                                    if p_elem.tag == t_type:
-                                        typ = p_elem
-                                if typ == None:
-                                    print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
-                                    skip = True
-                                    continue
-                                types = c_to_ml_type(typ, ns, local_env)
-                                if types == None:
-                                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
-                                    skip = True
-                                    continue
-                                params.append(Param(ps_elem, types))
-                        elif s_elem.tag == t_return_value:
-                            typ = None
-                            types = None
-                            for rv_elem in s_elem:
-                                if rv_elem.tag == t_type:
-                                    typ = rv_elem
-                            if typ.attrib['name'] == 'none':
-                                types = Types('unit', '', 'void', 'unit', '%s')
-                            else:
-                                types = ml_to_c_type(typ, ns, local_env)
-                            if types == None:
-                                print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
-                                skip = True
-                            result = types
-                    if not skip:
+                    params, result = get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env)
+                    if params:
                         c_name = c_elem.attrib['name'].replace('-', '_')
                         handlerfunc = 'ml_%s_%s_signal_handler_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
                         cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
