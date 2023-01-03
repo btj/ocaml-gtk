@@ -183,8 +183,30 @@ class Params:
         p.params = self.params[1:]
         return p
 
+class Class:
+    def __init__(self, parent):
+        self.parent = parent
+        self.lines = []
+        self.printed = False
 
-namespaces = {}
+class ClassPrinter:
+    def __init__(self, classes, ml):
+        self.classes = classes
+        self.is_first_class = True
+        self.ml = ml
+
+    def print_class(self, class_):
+        if not class_.printed:
+            class_.printed = True
+            if class_.parent is not None:
+                self.print_class(self.classes[class_.parent])
+            if self.is_first_class:
+                self.ml('class ' + class_.lines[0])
+                self.is_first_class = False
+            else:
+                self.ml('and ' + class_.lines[0])
+            for line in itertools.islice(class_.lines, 1, None):
+                self.ml(line)
 
 
 _C_HEADERS = '''\
@@ -230,23 +252,54 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
 }
 '''
 
+def ml_to_c_type(typ, ns, local_env):
+    name = typ.attrib.get('name')
+    if name == 'utf8':
+        return Types('string', 'String_val(%s)', 'const char *', 'string', '%s')
+    elif name == 'gboolean':
+        return Types('bool', 'Bool_val(%s)', 'gboolean', 'bool', '%s')
+    elif name == 'gint32':
+        return Types('int', 'Long_val(%s)', 'gint32', 'int', '%s')
+    elif name == 'guint32':
+        return Types('int', 'Long_val(%s)', 'guint32', 'int', '%s')
+    ns_elem = local_env.get(name, None)
+    if ns_elem is not None:
+        if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
+            return Types('int', 'Int_val(%s)', 'int', 'int', '%s')
+        elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
+            c_type = ns_elem.c_type_name
+            return Types('[>`%s] obj' % c_type, 'GObject_val(%s)', 'void *', ns_elem.ml_name0_for(ns), '%%s#as_%s' % c_type)
+        else:
+            return None
+    else:
+        return None
 
-def process_namespace(namespace, env):
-    namespace_name = namespace.attrib['name']
-    ml_file = open(namespace.attrib['name'] + '.ml', 'w')
-    def ml(*args):
-        print(*args, file=ml_file)
-    c_file = open('ml_' + namespace.attrib['name'] + '.c', 'w')
-    def cf(*args):
-        print(*args, file=c_file)
-    ml('[@@@alert "-unsafe"]')
-    ml()
-    ml('open Gobject0')
-    ml()
-    cf(_C_HEADERS)
-    ns = Namespace(env, namespace)
-    local_env = ns.local_env
-    namespaces[namespace_name] = ns
+def c_to_ml_type(typ, ns, local_env):
+    name = typ.attrib['name']
+    if name == 'gint32':
+        return Types('int', 'Val_long(%s)', 'gint32', 'int', '%s')
+    elif name == 'guint32':
+        return Types('int', 'Val_long(%s)', 'guint32', 'int', '%s')
+    elif name == 'gboolean':
+        return Types('bool', '(%s ? Val_true : Val_false)', 'gboolean', 'bool', '%s')
+    ns_elem = local_env.get(name, None)
+    if ns_elem != None:
+        if ns_elem.xml.tag == t_enumeration:
+            return Types('int', 'Val_int(%s)', 'int', 'int', '%s')
+        elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
+            ml_name0 = ns_elem.ml_name0_for(ns)
+            return Types(ml_name0 + '_', 'Val_GObject((void *)(%s))', 'void *', ml_name0, 'new %s (%%s)' % ml_name0)
+        else:
+            return None
+    else:
+        return None
+
+def print_skip(c_elem, ns_elem, reason):
+    c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
+    skip = 'Skipping %s %s of class %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name']) 
+    print('%s: %s' % (skip, reason))
+
+def output_gobject_types(ns, ml):
     for ns_elem_name, ns_elem in ns.elems.items():
         if ns_elem.xml.tag != t_class:
             continue
@@ -274,59 +327,32 @@ def process_namespace(namespace, env):
         if ns_elem.is_GObject:
             ml('type %s = [%s] obj' % (ns_elem.ml_name,
                 '|'.join('`' + a.c_type_name for a in ancestors)))
-    def ml_to_c_type(typ):
-        name = typ.attrib.get('name')
-        if name == 'utf8':
-            return Types('string', 'String_val(%s)', 'const char *', 'string', '%s')
-        elif name == 'gboolean':
-            return Types('bool', 'Bool_val(%s)', 'gboolean', 'bool', '%s')
-        elif name == 'gint32':
-            return Types('int', 'Long_val(%s)', 'gint32', 'int', '%s')
-        elif name == 'guint32':
-            return Types('int', 'Long_val(%s)', 'guint32', 'int', '%s')
-        ns_elem = local_env.get(name, None)
-        if ns_elem is not None:
-            if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
-                return Types('int', 'Int_val(%s)', 'int', 'int', '%s')
-            elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
-                c_type = ns_elem.c_type_name
-                return Types('[>`%s] obj' % c_type, 'GObject_val(%s)', 'void *', ns_elem.ml_name0_for(ns), '%%s#as_%s' % c_type)
-            else:
-                return None
-        else:
-            return None
-    def c_to_ml_type(typ):
-        name = typ.attrib['name']
-        if name == 'gint32':
-            return Types('int', 'Val_long(%s)', 'gint32', 'int', '%s')
-        elif name == 'guint32':
-            return Types('int', 'Val_long(%s)', 'guint32', 'int', '%s')
-        elif name == 'gboolean':
-            return Types('bool', '(%s ? Val_true : Val_false)', 'gboolean', 'bool', '%s')
-        ns_elem = local_env.get(name, None)
-        if ns_elem != None:
-            if ns_elem.xml.tag == t_enumeration:
-                return Types('int', 'Val_int(%s)', 'int', 'int', '%s')
-            elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
-                ml_name0 = ns_elem.ml_name0_for(ns)
-                return Types(ml_name0 + '_', 'Val_GObject((void *)(%s))', 'void *', ml_name0, 'new %s (%%s)' % ml_name0)
-            else:
-                return None
-        else:
-            return None
-    class Class:
-        def __init__(self, parent):
-            self.parent = parent
-            self.lines = []
-            self.printed = False
+
+
+namespaces = {}
+
+def process_namespace(namespace, env):
+    namespace_name = namespace.attrib['name']
+    ml_file = open(namespace.attrib['name'] + '.ml', 'w')
+    def ml(*args):
+        print(*args, file=ml_file)
+    c_file = open('ml_' + namespace.attrib['name'] + '.c', 'w')
+    def cf(*args):
+        print(*args, file=c_file)
+    ml('[@@@alert "-unsafe"]')
+    ml()
+    ml('open Gobject0')
+    ml()
+    cf(_C_HEADERS)
+    ns = Namespace(env, namespace)
+    local_env = ns.local_env
+    namespaces[namespace_name] = ns
+    output_gobject_types(ns, ml)
     classes = {}
     ctors_lines = []
     default_ctors_lines = []
     def ctl(line):
         ctors_lines.append(line)
-    def print_skip(c_elem, ns_elem, reason):
-        skip = 'Skipping %s %s of class %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name']) 
-        print('%s: %s' % (skip, reason))
     for ns_elem in namespace:
         if ns_elem.tag == t_bitfield or ns_elem.tag == t_enumeration:
             ml()
@@ -388,7 +414,7 @@ def process_namespace(namespace, env):
                                     print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
                                     skip = True
                                     continue
-                                types = ml_to_c_type(typ)
+                                types = ml_to_c_type(typ, ns, local_env)
                                 if types == None:
                                     print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
                                     skip = True
@@ -406,7 +432,7 @@ def process_namespace(namespace, env):
                             elif typ.attrib['name'] == 'none':
                                 types = Types('unit', 'Val_unit', None, 'unit', '%s')
                             else:
-                                types = c_to_ml_type(typ)
+                                types = c_to_ml_type(typ, ns, local_env)
                             if types == None:
                                 print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
                                 skip = True
@@ -486,7 +512,7 @@ def process_namespace(namespace, env):
                                     print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
                                     skip = True
                                     continue
-                                types = c_to_ml_type(typ)
+                                types = c_to_ml_type(typ, ns, local_env)
                                 if types == None:
                                     print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
                                     skip = True
@@ -501,7 +527,7 @@ def process_namespace(namespace, env):
                             if typ.attrib['name'] == 'none':
                                 types = Types('unit', '', 'void', 'unit', '%s')
                             else:
-                                types = ml_to_c_type(typ)
+                                types = ml_to_c_type(typ, ns, local_env)
                             if types == None:
                                 print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
                                 skip = True
@@ -536,22 +562,9 @@ def process_namespace(namespace, env):
             cl('  end')
             ctl('end')
     ml()
-    is_first_class = True
-    def print_class(class_):
-        nonlocal is_first_class
-        if not class_.printed:
-            class_.printed = True
-            if class_.parent is not None:
-                print_class(classes[class_.parent])
-            if is_first_class:
-                ml('class ' + class_.lines[0])
-                is_first_class = False
-            else:
-                ml('and ' + class_.lines[0])
-            for line in itertools.islice(class_.lines, 1, None):
-                ml(line)
+    class_printer = ClassPrinter(classes, ml)
     for class_ in classes.values():
-        print_class(class_)
+        class_printer.print_class(class_)
     ml()
     for line in ctors_lines:
         ml(line)
