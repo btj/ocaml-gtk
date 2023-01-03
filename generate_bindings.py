@@ -85,6 +85,88 @@ class NamespaceElement:
             return self.ml_name0
         return self.ns.name + '.' + self.ml_name0
 
+class Param:
+    def __init__(self, ps_elem, types):
+        name = ps_elem.attrib['name']
+        self.c_name = escape_c_keyword(name)
+        self.ml_name = escape_ml_keyword(name)
+        self.types = types
+
+    @property
+    def ml_typed_param(self):
+        return '(%s: %s)' % (self.ml_name, self.types[3])
+
+    @property
+    def ml_arg(self):
+        return self.types[4] % self.ml_name
+
+class CMethodParam:
+    def __init__(self, c_type_name):
+        self.c_name = 'instance_'
+        self.types = ('[>`%s] obj' % c_type_name, 'GObject_val(%s)', '%s *' % c_type_name)
+        self.ml_name = None
+
+class Params:
+    def __init__(self):
+        self.params = []
+
+    def append(self, param):
+        self.params.append(param)
+
+    def method_types(self):
+        if self.params == []:
+            return 'unit'
+        else:
+            return ' -> '.join(p.types[0] for p in self.params)
+
+    def signal_types(self):
+        if self.params == []:
+            return 'unit'
+        else:
+            return ' -> '.join(p.types[3] for p in self.params)
+
+    def ctor_params(self):
+        if self.params == []:
+            return '()'
+        else:
+            return ' '.join(p.ml_typed_param for p in self.params)
+
+    def ctor_args(self):
+        if self.params == []:
+            return '()'
+        else:
+            return ' '.join(p.ml_arg for p in self.params)
+
+    def method_params(self):
+        return ''.join(' ' + p.ml_typed_param for p in self.params)
+
+    def method_args(self):
+        return ''.join(' ' + p.ml_arg for p in self.params)
+
+    def callback_args(self):
+        if self.params == []:
+            return '()'
+        else:
+            return ' '.join(p.ml_name for p in self.params)
+
+    def callback_ret_args(self):
+        if self.params == []:
+            return '()'
+        else:
+            return ' '.join('(%s)' % p.ml_arg for p in self.params)
+
+    def c_callback_args(self):
+        if self.params == []:
+            return ['Val_unit']
+        else:
+            return [p.types[1] % p.c_name for p in self.params]
+
+    def drop_first(self):
+        p = Params()
+        p.params = self.params[1:]
+        return p
+
+
 namespaces = {}
 
 
@@ -261,7 +343,9 @@ def process_namespace(namespace, env):
                     pass
                 elif c_elem.tag == t_constructor or c_elem.tag == t_method:
                     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-                    params = [('instance_', ('[>`%s] obj' % c_type_name, 'GObject_val(%s)', '%s *' % c_type_name))] if c_elem_tag == 'method' else []
+                    params = Params()
+                    if c_elem_tag == 'method':
+                        params.append(CMethodParam(c_type_name))
                     throws = c_elem.attrib.get('throws', None) == '1'
                     result = None
                     skip = False
@@ -292,7 +376,7 @@ def process_namespace(namespace, env):
                                     print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
                                     skip = True
                                     continue
-                                params.append((escape_c_keyword(ps_elem.attrib['name']), types, escape_ml_keyword(ps_elem.attrib['name'])))
+                                params.append(Param(ps_elem, types))
                         elif m_elem.tag == t_return_value:
                             typ = None
                             types = None
@@ -310,7 +394,7 @@ def process_namespace(namespace, env):
                                 print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
                                 skip = True
                             result = types
-                    if len(params) > 5:
+                    if len(params.params) > 5:
                         # Skip for now; requires separate C functions for the bytecode runtime and the native code runtime
                         print_skip(c_elem, ns_elem, 'has more than 5 parameters')
                         skip = True
@@ -325,33 +409,33 @@ def process_namespace(namespace, env):
                                 result = expected_result
                         cfunc = 'ml_%s_%s_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_elem.attrib['name'])
                         mlfunc = escape_ml_keyword(c_elem.attrib['name'])
-                        ml('  external %s: %s -> %s = "%s"' % (mlfunc, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
+                        ml('  external %s: %s -> %s = "%s"' % (mlfunc, params.method_types(), result[0], cfunc))
                         if c_elem_tag == 'constructor':
-                            params_text = ' '.join('(%s: %s)' % (p[2], p[1][3]) for p in params) if params != [] else '()'
-                            args_text = ' '.join(p[1][4] % p[2] for p in params) if params != [] else '()'
+                            params_text = params.ctor_params()
+                            args_text = params.ctor_args()
                             ctl('  let %s %s = new %s (%s_.%s %s)' % (mlfunc, params_text, nse.ml_name0, nse.name, mlfunc, args_text))
                             if c_elem.attrib['name'] == 'new':
                                 default_ctors_lines.append('let %s %s = new %s (%s_.%s %s)' % (nse.ml_name0, params_text, nse.ml_name0, nse.name, mlfunc, args_text))
                         else:
-                            mparams = params[1:]
+                            mparams = params.drop_first()
                             method_name = mlfunc + '_' if ns.name == 'Gtk' and nse.name == 'Widget' and mlfunc == 'get_settings' else mlfunc # To work around a weird OCaml compiler error message
-                            params_text = ''.join(' (%s: %s)' % (p[2], p[1][3]) for p in mparams)
-                            args_text = ''.join(' ' + (p[1][4] % p[2]) for p in mparams)
+                            params_text = mparams.method_params()
+                            args_text = mparams.method_args()
                             body = result[4] % ('%s_.%s self%s' % (nse.name, mlfunc, args_text))
                             cl('    method %s%s = %s' % (method_name, params_text, body))
                         cf()
-                        cf('CAMLprim value %s(%s) {' % (cfunc, ', '.join('value %s' % p[0] for p in params)))
-                        params1 = params[:5]
-                        params2 = params[5:]
-                        cf('  CAMLparam%d(%s);' % (len(params1), ', '.join(p[0] for p in params1)))
+                        cf('CAMLprim value %s(%s) {' % (cfunc, ', '.join('value %s' % p.c_name for p in params.params)))
+                        params1 = params.params[:5]
+                        params2 = params.params[5:]
+                        cf('  CAMLparam%d(%s);' % (len(params1), ', '.join(p.c_name for p in params1)))
                         while params2 != []:
                             params2_1 = params2[:5]
                             params2 = params2[5:]
-                            cf('  CAMLxparam%d(%s);' % (len(params2_1), ', '.join(p[0] for p in params2_1)))
+                            cf('  CAMLxparam%d(%s);' % (len(params2_1), ', '.join(p.c_name for p in params2_1)))
                         if throws:
                             cf('  CAMLlocal1(exn_msg);');
                             cf('  GError *err = NULL;')
-                        args = ', '.join([p[1][1] % p[0] for p in params] + (['&err'] if throws else []))
+                        args = ', '.join([p.types[1] % p.c_name for p in params.params] + (['&err'] if throws else []))
                         call = '%s(%s)' % (c_elem.attrib[a_identifier], args)
                         if result[0] == 'unit':
                             cf('  %s;' % call)
@@ -368,7 +452,7 @@ def process_namespace(namespace, env):
                         cl('    method run argv = Application_.run self argv')
                         cf(_GIO_APPLICATION_RUN)
                 elif c_elem.tag == t_signal:
-                    params = []
+                    params = Params()
                     result = None
                     skip = False
                     for s_elem in c_elem:
@@ -390,7 +474,7 @@ def process_namespace(namespace, env):
                                     print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
                                     skip = True
                                     continue
-                                params.append((escape_c_keyword(ps_elem.attrib['name']), types, escape_ml_keyword(ps_elem.attrib['name'])))
+                                params.append(Param(ps_elem, types))
                         elif s_elem.tag == t_return_value:
                             typ = None
                             types = None
@@ -409,16 +493,16 @@ def process_namespace(namespace, env):
                         c_name = c_elem.attrib['name'].replace('-', '_')
                         handlerfunc = 'ml_%s_%s_signal_handler_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
                         cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
-                        ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, "unit" if params == [] else " -> ".join(p[1][0] for p in params), result[0], cfunc))
-                        cl('    method signal_connect_%s (callback: %s -> %s) = %s_.signal_connect_%s self (fun %s -> %s)' % (c_name, "unit" if params == [] else " -> ".join(p[1][3] for p in params), result[3], nse.name, c_name, '()' if params == [] else ' '.join(p[2] for p in params), result[4] % ('(callback %s)' % ('()' if params == [] else ' '.join('(%s)' % (p[1][4] % p[2]) for p in params)))))
+                        ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, params.method_types(), result[0], cfunc))
+                        cl('    method signal_connect_%s (callback: %s -> %s) = %s_.signal_connect_%s self (fun %s -> %s)' % (c_name, params.signal_types(), result[3], nse.name, c_name, params.callback_args(), result[4] % ('(callback %s)' % params.callback_ret_args())))
                         cf()
-                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p[1][2], p[0]) for p in params)))
+                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p.types[2], p.c_name) for p in params.params)))
                         cf('  CAMLparam0();')
-                        nb_args = max(1, len(params))
+                        nb_args = max(1, len(params.params))
                         cf('  CAMLlocalN(args, %d);' % nb_args)
                         cf('  if (!callbacks_allowed) abort();')
                         cf('  callbacks_allowed = false;')
-                        callback_args = ['Val_unit'] if params == [] else [p[1][1] % p[0] for p in params]
+                        callback_args = params.c_callback_args()
                         for i in range(nb_args):
                             cf('  args[%d] = %s;' % (i, callback_args[i]))
                         result_decl, result_conv, return_stmt = (';', '%s', 'CAMLreturn0;') if result[0] == 'unit' else ('%s result = ' % result[2], result[1], 'CAMLreturnT(%s, result);' % result[2])
