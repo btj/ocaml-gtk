@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import xml.etree.ElementTree as ET
 import itertools
 
@@ -85,6 +86,14 @@ class NamespaceElement:
             return self.ml_name0
         return self.ns.name + '.' + self.ml_name0
 
+@dataclass
+class Types:
+    ml_type: str
+    as_ml_value: str
+    c_type: str
+    oo_type: str
+    unwrap: str
+
 class Param:
     def __init__(self, ps_elem, types):
         name = ps_elem.attrib['name']
@@ -94,17 +103,25 @@ class Param:
 
     @property
     def ml_typed_param(self):
-        return '(%s: %s)' % (self.ml_name, self.types[3])
+        return '(%s: %s)' % (self.ml_name, self.types.oo_type)
 
     @property
     def ml_arg(self):
-        return self.types[4] % self.ml_name
+        return self.types.unwrap % self.ml_name
+
+    @property
+    def c_value(self):
+        return self.types.as_ml_value % self.c_name
 
 class CMethodParam:
     def __init__(self, c_type_name):
         self.c_name = 'instance_'
-        self.types = ('[>`%s] obj' % c_type_name, 'GObject_val(%s)', '%s *' % c_type_name)
+        self.types = Types('[>`%s] obj' % c_type_name, 'GObject_val(%s)', '%s *' % c_type_name, None, None)
         self.ml_name = None
+
+    @property
+    def c_value(self):
+        return self.types.as_ml_value % self.c_name
 
 class Params:
     def __init__(self):
@@ -117,13 +134,13 @@ class Params:
         if self.params == []:
             return 'unit'
         else:
-            return ' -> '.join(p.types[0] for p in self.params)
+            return ' -> '.join(p.types.ml_type for p in self.params)
 
     def signal_types(self):
         if self.params == []:
             return 'unit'
         else:
-            return ' -> '.join(p.types[3] for p in self.params)
+            return ' -> '.join(p.types.oo_type for p in self.params)
 
     def ctor_params(self):
         if self.params == []:
@@ -159,7 +176,7 @@ class Params:
         if self.params == []:
             return ['Val_unit']
         else:
-            return [p.types[1] % p.c_name for p in self.params]
+            return [p.c_value for p in self.params]
 
     def drop_first(self):
         p = Params()
@@ -260,20 +277,20 @@ def process_namespace(namespace, env):
     def ml_to_c_type(typ):
         name = typ.attrib.get('name')
         if name == 'utf8':
-            return ('string', 'String_val(%s)', 'const char *', 'string', '%s')
+            return Types('string', 'String_val(%s)', 'const char *', 'string', '%s')
         elif name == 'gboolean':
-            return ('bool', 'Bool_val(%s)', 'gboolean', 'bool', '%s')
+            return Types('bool', 'Bool_val(%s)', 'gboolean', 'bool', '%s')
         elif name == 'gint32':
-            return ('int', 'Long_val(%s)', 'gint32', 'int', '%s')
+            return Types('int', 'Long_val(%s)', 'gint32', 'int', '%s')
         elif name == 'guint32':
-            return ('int', 'Long_val(%s)', 'guint32', 'int', '%s')
+            return Types('int', 'Long_val(%s)', 'guint32', 'int', '%s')
         ns_elem = local_env.get(name, None)
         if ns_elem is not None:
             if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
-                return ('int', 'Int_val(%s)', 'int', 'int', '%s')
+                return Types('int', 'Int_val(%s)', 'int', 'int', '%s')
             elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
                 c_type = ns_elem.c_type_name
-                return ('[>`%s] obj' % c_type, 'GObject_val(%s)', 'void *', ns_elem.ml_name0_for(ns), '%%s#as_%s' % c_type)
+                return Types('[>`%s] obj' % c_type, 'GObject_val(%s)', 'void *', ns_elem.ml_name0_for(ns), '%%s#as_%s' % c_type)
             else:
                 return None
         else:
@@ -281,18 +298,18 @@ def process_namespace(namespace, env):
     def c_to_ml_type(typ):
         name = typ.attrib['name']
         if name == 'gint32':
-            return ('int', 'Val_long(%s)', 'gint32', 'int', '%s')
+            return Types('int', 'Val_long(%s)', 'gint32', 'int', '%s')
         elif name == 'guint32':
-            return ('int', 'Val_long(%s)', 'guint32', 'int', '%s')
+            return Types('int', 'Val_long(%s)', 'guint32', 'int', '%s')
         elif name == 'gboolean':
-            return ('bool', '(%s ? Val_true : Val_false)', 'gboolean', 'bool', '%s')
+            return Types('bool', '(%s ? Val_true : Val_false)', 'gboolean', 'bool', '%s')
         ns_elem = local_env.get(name, None)
         if ns_elem != None:
             if ns_elem.xml.tag == t_enumeration:
-                return ('int', 'Val_int(%s)', 'int', 'int', '%s')
+                return Types('int', 'Val_int(%s)', 'int', 'int', '%s')
             elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
                 ml_name0 = ns_elem.ml_name0_for(ns)
-                return (ml_name0 + '_', 'Val_GObject((void *)(%s))', 'void *', ml_name0, 'new %s (%%s)' % ml_name0)
+                return Types(ml_name0 + '_', 'Val_GObject((void *)(%s))', 'void *', ml_name0, 'new %s (%%s)' % ml_name0)
             else:
                 return None
         else:
@@ -387,7 +404,7 @@ def process_namespace(namespace, env):
                                 types = None
                                 typ = rv_elem
                             elif typ.attrib['name'] == 'none':
-                                types = ('unit', 'Val_unit', None, 'unit', '%s')
+                                types = Types('unit', 'Val_unit', None, 'unit', '%s')
                             else:
                                 types = c_to_ml_type(typ)
                             if types == None:
@@ -402,14 +419,14 @@ def process_namespace(namespace, env):
                         skip = True
                     if not skip:
                         if c_elem_tag == 'constructor':
-                            expected_result = (nse.ml_name, 'Val_GObject((void *)(%s))', 'void *')
+                            expected_result = Types(nse.ml_name, 'Val_GObject((void *)(%s))', 'void *', None, None)
                             if result != expected_result:
-                                if result[0] != 'widget' and result[0] != 'Gtk.widget':
+                                if result.ml_type != 'widget' and result.ml_type != 'Gtk.widget':
                                     print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' % (c_elem.attrib['name'], ns.name + '.' + ns_elem.attrib['name']))
                                 result = expected_result
                         cfunc = 'ml_%s_%s_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_elem.attrib['name'])
                         mlfunc = escape_ml_keyword(c_elem.attrib['name'])
-                        ml('  external %s: %s -> %s = "%s"' % (mlfunc, params.method_types(), result[0], cfunc))
+                        ml('  external %s: %s -> %s = "%s"' % (mlfunc, params.method_types(), result.ml_type, cfunc))
                         if c_elem_tag == 'constructor':
                             params_text = params.ctor_params()
                             args_text = params.ctor_args()
@@ -421,7 +438,7 @@ def process_namespace(namespace, env):
                             method_name = mlfunc + '_' if ns.name == 'Gtk' and nse.name == 'Widget' and mlfunc == 'get_settings' else mlfunc # To work around a weird OCaml compiler error message
                             params_text = mparams.method_params()
                             args_text = mparams.method_args()
-                            body = result[4] % ('%s_.%s self%s' % (nse.name, mlfunc, args_text))
+                            body = result.unwrap % ('%s_.%s self%s' % (nse.name, mlfunc, args_text))
                             cl('    method %s%s = %s' % (method_name, params_text, body))
                         cf()
                         cf('CAMLprim value %s(%s) {' % (cfunc, ', '.join('value %s' % p.c_name for p in params.params)))
@@ -435,14 +452,14 @@ def process_namespace(namespace, env):
                         if throws:
                             cf('  CAMLlocal1(exn_msg);');
                             cf('  GError *err = NULL;')
-                        args = ', '.join([p.types[1] % p.c_name for p in params.params] + (['&err'] if throws else []))
+                        args = ', '.join([p.c_value for p in params.params] + (['&err'] if throws else []))
                         call = '%s(%s)' % (c_elem.attrib[a_identifier], args)
-                        if result[0] == 'unit':
+                        if result.ml_type == 'unit':
                             cf('  %s;' % call)
                             ml_result = 'Val_unit'
                         else:
-                            cf('  %s result = %s;' % (result[2], call))
-                            ml_result = result[1] % 'result'
+                            cf('  %s result = %s;' % (result.c_type, call))
+                            ml_result = result.as_ml_value % 'result'
                         if throws:
                             cf('  if (err) { exn_msg = caml_copy_string(err->message); g_error_free(err); caml_failwith_value(exn_msg); }')
                         cf('  CAMLreturn(%s);' % ml_result)
@@ -482,7 +499,7 @@ def process_namespace(namespace, env):
                                 if rv_elem.tag == t_type:
                                     typ = rv_elem
                             if typ.attrib['name'] == 'none':
-                                types = ('unit', '', 'void', 'unit', '%s')
+                                types = Types('unit', '', 'void', 'unit', '%s')
                             else:
                                 types = ml_to_c_type(typ)
                             if types == None:
@@ -493,10 +510,10 @@ def process_namespace(namespace, env):
                         c_name = c_elem.attrib['name'].replace('-', '_')
                         handlerfunc = 'ml_%s_%s_signal_handler_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
                         cfunc = 'ml_%s_%s_signal_connect_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_name)
-                        ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, params.method_types(), result[0], cfunc))
-                        cl('    method signal_connect_%s (callback: %s -> %s) = %s_.signal_connect_%s self (fun %s -> %s)' % (c_name, params.signal_types(), result[3], nse.name, c_name, params.callback_args(), result[4] % ('(callback %s)' % params.callback_ret_args())))
+                        ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' % (c_name, nse.c_type_name, params.method_types(), result.ml_type, cfunc))
+                        cl('    method signal_connect_%s (callback: %s -> %s) = %s_.signal_connect_%s self (fun %s -> %s)' % (c_name, params.signal_types(), result.oo_type, nse.name, c_name, params.callback_args(), result.unwrap % ('(callback %s)' % params.callback_ret_args())))
                         cf()
-                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result[2], handlerfunc, ''.join('%s %s, ' % (p.types[2], p.c_name) for p in params.params)))
+                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result.c_type, handlerfunc, ''.join('%s %s, ' % (p.types.c_type, p.c_name) for p in params.params)))
                         cf('  CAMLparam0();')
                         nb_args = max(1, len(params.params))
                         cf('  CAMLlocalN(args, %d);' % nb_args)
@@ -505,7 +522,7 @@ def process_namespace(namespace, env):
                         callback_args = params.c_callback_args()
                         for i in range(nb_args):
                             cf('  args[%d] = %s;' % (i, callback_args[i]))
-                        result_decl, result_conv, return_stmt = (';', '%s', 'CAMLreturn0;') if result[0] == 'unit' else ('%s result = ' % result[2], result[1], 'CAMLreturnT(%s, result);' % result[2])
+                        result_decl, result_conv, return_stmt = (';', '%s', 'CAMLreturn0;') if result.ml_type == 'unit' else ('%s result = ' % result.c_type, result.as_ml_value, 'CAMLreturnT(%s, result);' % result.c_type)
                         callback = 'caml_callbackN(*callbackCell, %d, args)' % nb_args
                         cf('  %s%s;' % (result_decl, result_conv % callback))
                         cf('  callbacks_allowed = true;')
