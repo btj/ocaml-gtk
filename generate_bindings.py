@@ -429,6 +429,33 @@ def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
             result = types
     return params, result
 
+def output_signal_c_code(c_elem, c_func, handler_func, params, result, cf):
+    cf()
+    cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result.c_type, handler_func, params.c_params()))
+    cf('  CAMLparam0();')
+    nb_args = max(1, len(params.params))
+    cf('  CAMLlocalN(args, %d);' % nb_args)
+    cf('  if (!callbacks_allowed) abort();')
+    cf('  callbacks_allowed = false;')
+    callback_args = params.c_callback_args()
+    for i in range(nb_args):
+        cf('  args[%d] = %s;' % (i, callback_args[i]))
+    if result.ml_type == 'unit':
+        result_decl, result_conv, return_stmt = (';', '%s', 'CAMLreturn0;')
+    else:
+        result_decl = '%s result = ' % result.c_type
+        result_conv = result.as_ml_value
+        return_stmt = 'CAMLreturnT(%s, result);' % result.c_type
+    callback = 'caml_callbackN(*callbackCell, %d, args)' % nb_args
+    cf('  %s%s;' % (result_decl, result_conv % callback))
+    cf('  callbacks_allowed = true;')
+    cf('  %s' % return_stmt)
+    cf('}')
+    cf()
+    cf('CAMLprim value %s(value instance_, value callback) {' % c_func)
+    cf('  return ml_GObject_signal_connect(instance_, "%s", %s, callback);' % (c_elem.attrib['name'], handler_func))
+    cf('}')
+
 NAMESPACES = {}
 
 def process_namespace(namespace, env):
@@ -554,39 +581,15 @@ def process_namespace(namespace, env):
                     if params:
                         c_name = c_elem.attrib['name'].replace('-', '_')
                         prefix = 'ml_%s_%s' % (namespace.attrib['name'], ns_elem.attrib['name'])
-                        handlerfunc = '%s_signal_handler_%s' % (prefix, c_name)
-                        cfunc = '%s_signal_connect_%s' % (prefix, c_name)
+                        handler_func = '%s_signal_handler_%s' % (prefix, c_name)
+                        c_func = '%s_signal_connect_%s' % (prefix, c_name)
                         ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' %
-                           (c_name, nse.c_type_name, params.method_types(), result.ml_type, cfunc))
+                           (c_name, nse.c_type_name, params.method_types(), result.ml_type, c_func))
                         res = result.unwrap % ('(callback %s)' % params.callback_ret_args())
                         signal_fn = '(fun %s -> %s)' % (params.callback_args(), res)
                         cl('    method signal_connect_%s (callback: %s -> %s) = %s_.signal_connect_%s self %s' %
                            (c_name, params.signal_types(), result.oo_type, nse.name, c_name, signal_fn))
-                        cf()
-                        cf('%s %s(GObject *instance_, %svalue *callbackCell) {' % (result.c_type, handlerfunc, params.c_params()))
-                        cf('  CAMLparam0();')
-                        nb_args = max(1, len(params.params))
-                        cf('  CAMLlocalN(args, %d);' % nb_args)
-                        cf('  if (!callbacks_allowed) abort();')
-                        cf('  callbacks_allowed = false;')
-                        callback_args = params.c_callback_args()
-                        for i in range(nb_args):
-                            cf('  args[%d] = %s;' % (i, callback_args[i]))
-                        if result.ml_type == 'unit':
-                            result_decl, result_conv, return_stmt = (';', '%s', 'CAMLreturn0;')
-                        else:
-                            result_decl = '%s result = ' % result.c_type
-                            result_conv = result.as_ml_value
-                            return_stmt = 'CAMLreturnT(%s, result);' % result.c_type
-                        callback = 'caml_callbackN(*callbackCell, %d, args)' % nb_args
-                        cf('  %s%s;' % (result_decl, result_conv % callback))
-                        cf('  callbacks_allowed = true;')
-                        cf('  %s' % return_stmt)
-                        cf('}')
-                        cf()
-                        cf('CAMLprim value %s(value instance_, value callback) {' % cfunc)
-                        cf('  return ml_GObject_signal_connect(instance_, "%s", %s, callback);' % (c_elem.attrib['name'], handlerfunc))
-                        cf('}')
+                        output_signal_c_code(c_elem, c_func, handler_func, params, result, cf)
             ml('end')
             cl('  end')
             ctl('end')
