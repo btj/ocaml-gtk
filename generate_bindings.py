@@ -552,10 +552,10 @@ def process_namespace(namespace, env):
                         if c_elem_tag == 'constructor':
                             params_text = params.ctor_params()
                             args_text = params.ctor_args()
-                            ctl('  let %s %s = new %s (%s_.%s %s)' % (ml_func, params_text, nse.ml_name0, nse.name, ml_func, args_text))
+                            new = 'new %s (%s_.%s %s)' % (nse.ml_name0, nse.name, ml_func, args_text)
+                            ctl('  let %s %s = %s' % (ml_func, params_text, new))
                             if c_elem.attrib['name'] == 'new':
-                                ctor = 'let %s %s = new %s (%s_.%s %s)' % (
-                                    nse.ml_name0, params_text, nse.ml_name0, nse.name, ml_func, args_text)
+                                ctor = 'let %s %s = %s' % (nse.ml_name0, params_text, new)
                                 default_ctors_lines.append(ctor)
                         else:
                             mparams = params.drop_first()
