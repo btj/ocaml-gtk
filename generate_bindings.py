@@ -336,6 +336,14 @@ def output_gobject_types(ns, ml):
             ml('type %s = [%s] obj' % (ns_elem.ml_name,
                 '|'.join('`' + a.c_type_name for a in ancestors)))
 
+def find_type(es, t_type):
+    """Find the element with type tag == t_type"""
+    for e in es:
+        if e.tag == t_type:
+            return e, True
+    # Return the last element if we have not found anything
+    return e, False
+
 def get_method_params(c_elem, c_type_name, ns_elem, ns, local_env):
     params = Params()
     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
@@ -353,12 +361,8 @@ def get_method_params(c_elem, c_type_name, ns_elem, ns, local_env):
                 if 'direction' in ps_elem.attrib:
                     print_skip(c_elem, ns_elem, 'explicit "direction" attribute for parameter %s not yet supported' % ps_name)
                     return None, None
-                typ = None
-                types = None
-                for p_elem in ps_elem:
-                    if p_elem.tag == t_type:
-                        typ = p_elem
-                if typ == None:
+                typ, found = find_type(ps_elem, t_type)
+                if not found:
                     print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
                     return None, None
                 types = ml_to_c_type(typ, ns, local_env)
@@ -367,14 +371,9 @@ def get_method_params(c_elem, c_type_name, ns_elem, ns, local_env):
                     return None, None
                 params.append(Param(ps_elem, types))
         elif m_elem.tag == t_return_value:
-            typ = None
-            types = None
-            for rv_elem in m_elem:
-                if rv_elem.tag == t_type:
-                    typ = rv_elem
-            if typ == None:
+            typ, found = find_type(m_elem, t_type)
+            if not found:
                 types = None
-                typ = rv_elem
             elif typ.attrib['name'] == 'none':
                 types = Types('unit', 'Val_unit', None, 'unit', '%s')
             else:
@@ -400,12 +399,8 @@ def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
             for ps_elem in s_elem:
                 assert ps_elem.tag == t_parameter
                 ps_name = ps_elem.attrib['name']
-                typ = None
-                types = None
-                for p_elem in ps_elem:
-                    if p_elem.tag == t_type:
-                        typ = p_elem
-                if typ == None:
+                typ, found = find_type(ps_elem, t_type)
+                if not found:
                     print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
                     return None, None
                 types = c_to_ml_type(typ, ns, local_env)
@@ -414,11 +409,9 @@ def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
                     return None, None
                 params.append(Param(ps_elem, types))
         elif s_elem.tag == t_return_value:
-            typ = None
-            types = None
-            for rv_elem in s_elem:
-                if rv_elem.tag == t_type:
-                    typ = rv_elem
+            typ, found = find_type(s_elem, t_type)
+            if not found:
+                types = None
             if typ.attrib['name'] == 'none':
                 types = Types('unit', '', 'void', 'unit', '%s')
             else:
@@ -460,10 +453,10 @@ NAMESPACES = {}
 
 def process_namespace(namespace, env):
     namespace_name = namespace.attrib['name']
-    ml_file = open(namespace.attrib['name'] + '.ml', 'w')
+    ml_file = open(namespace_name + '.ml', 'w')
     def ml(*args):
         print(*args, file=ml_file)
-    c_file = open('ml_' + namespace.attrib['name'] + '.c', 'w')
+    c_file = open('ml_' + namespace_name + '.c', 'w')
     def cf(*args):
         print(*args, file=c_file)
     ml('[@@@alert "-unsafe"]')
@@ -488,7 +481,7 @@ def process_namespace(namespace, env):
                 if bf_elem.tag == t_member:
                     ml('  let %s = %s' % (escape_ml_keyword(bf_elem.attrib['name']), bf_elem.attrib['value']))
             ml('end')
-        if ns_elem.tag == t_class:
+        elif ns_elem.tag == t_class:
             nse = local_env[ns_elem.attrib['name']]
             if not nse.is_GObject:
                 continue
@@ -523,10 +516,10 @@ def process_namespace(namespace, env):
                         if c_elem_tag == 'constructor':
                             expected_result = Types(nse.ml_name, 'Val_GObject((void *)(%s))', 'void *', None, None)
                             if result != expected_result:
-                                if result.ml_type != 'widget' and result.ml_type != 'Gtk.widget':
+                                if result.ml_type not in ['widget', 'Gtk.widget']:
                                     print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' % (c_elem.attrib['name'], ns.name + '.' + ns_elem.attrib['name']))
                                 result = expected_result
-                        cfunc = 'ml_%s_%s_%s' % (namespace.attrib['name'], ns_elem.attrib['name'], c_elem.attrib['name'])
+                        cfunc = 'ml_%s_%s_%s' % (namespace_name, ns_elem.attrib['name'], c_elem.attrib['name'])
                         mlfunc = escape_ml_keyword(c_elem.attrib['name'])
                         ml('  external %s: %s -> %s = "%s"' % (mlfunc, params.method_types(), result.ml_type, cfunc))
                         if c_elem_tag == 'constructor':
@@ -580,7 +573,7 @@ def process_namespace(namespace, env):
                     params, result = get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env)
                     if params:
                         c_name = c_elem.attrib['name'].replace('-', '_')
-                        prefix = 'ml_%s_%s' % (namespace.attrib['name'], ns_elem.attrib['name'])
+                        prefix = 'ml_%s_%s' % (namespace_name, ns_elem.attrib['name'])
                         handler_func = '%s_signal_handler_%s' % (prefix, c_name)
                         c_func = '%s_signal_connect_%s' % (prefix, c_name)
                         ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' %
