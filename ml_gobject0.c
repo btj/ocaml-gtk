@@ -7,6 +7,7 @@
 #include <caml/memory.h>
 #include <caml/callback.h>
 #include <caml/custom.h>
+#include <caml/fail.h>
 #include "ml_gobject0.h"
 
 bool callbacks_allowed;
@@ -48,7 +49,7 @@ value ml_GObject_signal_connect(value instance, const char *signal, void *c_hand
   CAMLparam2(instance, callback);
 
   value *callbackCell = malloc(sizeof(value));
-  if (callbackCell == 0) abort();
+  if (callbackCell == 0) caml_raise_out_of_memory();
   *callbackCell = callback;
 
   caml_register_global_root(callbackCell);
