@@ -32,5 +32,5 @@ On Ubuntu 22.04.1, these system packages are required:
     - if using Ubuntu packages on x86-64, this is `/usr/lib/x86_64-linux-gnu`
     - if using Linux Brew, this is `/home/linuxbrew/.linuxbrew/lib`
 2. Run `dune build`
-3. Built example programme can be found at `_build/default/example0.exe`
+3. Built example programme can be found at `_build/default/examples/example0.exe`
 

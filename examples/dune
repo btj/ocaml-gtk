@@ -1,0 +1,10 @@
+
+(executable (name example0)
+ (modules example0)
+ (libraries ocamlgtk)
+)
+
+(executable (name example0_oo)
+ (modules example0_oo)
+ (libraries ocamlgtk)
+)
