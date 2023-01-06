@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import xml.etree.ElementTree as ET
-import itertools
 
 c_functions_to_skip = {'g_io_module_load', 'g_io_module_unload'} # https://gitlab.gnome.org/GNOME/glib/-/issues/2498
 
@@ -191,11 +190,63 @@ class Params:
         p.params = self.params[1:]
         return p
 
+@dataclass
+class Method:
+    name: str
+    params: Params
+    result: Types
+    ml_func: str
+    module_name: str
+
+    def to_ml(self):
+        params_text = self.params.method_params()
+        args_text = self.params.method_args()
+        body = self.result.unwrap % (
+            '%s_.%s self%s' % (self.module_name, self.ml_func, args_text))
+        return 'method %s%s = %s' % (self.name, params_text, body)
+
+class GioApplicationRunMethod:
+    def to_ml(self):
+        return 'method run argv = Application_.run self argv'
+
+@dataclass
+class Signal:
+    name: str
+    params: Params
+    result: Types
+    module_name: str
+
+    def to_ml(self):
+        method_name = 'signal_connect_%s' % self.name
+        res = self.result.unwrap % ('(callback %s)' % self.params.callback_ret_args())
+        signal_fn = '(fun %s -> %s)' % (self.params.callback_args(), res)
+        body = '%s_.%s self %s' % (self.module_name, method_name, signal_fn)
+        return ('method %s (callback: %s -> %s) = %s' %
+                (method_name, self.params.signal_types(), self.result.oo_type, body))
+
 class Class:
-    def __init__(self, parent):
+    def __init__(self, name, parent):
+        self.name = name
         self.parent = parent
-        self.lines = []
         self.printed = False
+        # Will be filled in while reading the xml file
+        self.self_type = None
+        self.inherit = None
+        self.c_type_name = None
+        self.methods = []
+        self.signals = []
+
+    def ml_lines(self):
+        lines = [
+            '%s (self: %s) =' % (self.name, self.self_type),
+            '  object',
+        ]
+        if self.inherit:
+            lines.append('    inherit %s (%s.upcast self)' % self.inherit)
+        lines.append('    method as_%s = self' % self.c_type_name)
+        lines += ['    ' + x.to_ml() for x in (self.methods + self.signals)]
+        lines.append('  end')
+        return lines
 
 class ClassPrinter:
     def __init__(self, classes, ml):
@@ -204,17 +255,19 @@ class ClassPrinter:
         self.ml = ml
 
     def print_class(self, class_):
-        if not class_.printed:
-            class_.printed = True
-            if class_.parent is not None:
-                self.print_class(self.classes[class_.parent])
-            if self.is_first_class:
-                self.ml('class ' + class_.lines[0])
-                self.is_first_class = False
-            else:
-                self.ml('and ' + class_.lines[0])
-            for line in itertools.islice(class_.lines, 1, None):
-                self.ml(line)
+        if class_.printed:
+            return
+        class_.printed = True
+        if class_.parent is not None:
+            self.print_class(self.classes[class_.parent])
+        first, *rest = class_.ml_lines()
+        if self.is_first_class:
+            self.ml('class ' + first)
+            self.is_first_class = False
+        else:
+            self.ml('and ' + first)
+        for line in rest:
+            self.ml(line)
 
 
 _C_HEADERS = '''\
@@ -513,23 +566,19 @@ def process_namespace(namespace, env):
             if not nse.is_GObject:
                 continue
             if nse.parent and nse.parent.ns is nse.ns:
-                class_ = Class(nse.parent.ml_name0)
+                class_ = Class(nse.ml_name0, nse.parent.ml_name0)
             else:
-                class_ = Class(None)
+                class_ = Class(nse.ml_name0, None)
             classes[nse.ml_name0] = class_
-            def cl(line):
-                class_.lines.append(line)
             c_type_name = nse.c_type_name
             ml()
             ml('module %s_ = struct' % ns_elem.attrib['name'])
             ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (c_type_name, nse.ml_name))
-            cl('%s (self: %s) =' % (nse.ml_name0, nse.ml_name))
-            cl('  object')
+            class_.self_type = nse.ml_name
             if nse.parent_name is not None:
                 qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.name + '.'
-                cl('    inherit %s (%s.upcast self)' %
-                   (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_'))
-            cl('    method as_%s = self' % c_type_name)
+                class_.inherit = (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_')
+            class_.c_type_name = c_type_name
             ctl('')
             ctl('module %s = struct' % ns_elem.attrib['name'])
             for c_elem in ns_elem:
@@ -564,14 +613,12 @@ def process_namespace(namespace, env):
                                 method_name = ml_func + '_'
                             else:
                                 method_name = ml_func
-                            params_text = mparams.method_params()
-                            args_text = mparams.method_args()
-                            body = result.unwrap % ('%s_.%s self%s' % (nse.name, ml_func, args_text))
-                            cl('    method %s%s = %s' % (method_name, params_text, body))
+                            class_.methods.append(Method(method_name, mparams, result, ml_func, nse.name))
+
                         output_method_c_code(c_elem, c_func, params, result, cf)
                     elif ns.name == 'Gio' and ns_elem.attrib['name'] == 'Application' and c_elem.attrib['name'] == 'run':
                         ml('  external run: [>`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
-                        cl('    method run argv = Application_.run self argv')
+                        class_.methods.append(GioApplicationRunMethod())
                         cf(_GIO_APPLICATION_RUN)
                 elif c_elem.tag == t_signal:
                     params, result = get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env)
@@ -582,13 +629,9 @@ def process_namespace(namespace, env):
                         c_func = '%s_signal_connect_%s' % (prefix, c_name)
                         ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' %
                            (c_name, nse.c_type_name, params.method_types(), result.ml_type, c_func))
-                        res = result.unwrap % ('(callback %s)' % params.callback_ret_args())
-                        signal_fn = '(fun %s -> %s)' % (params.callback_args(), res)
-                        cl('    method signal_connect_%s (callback: %s -> %s) = %s_.signal_connect_%s self %s' %
-                           (c_name, params.signal_types(), result.oo_type, nse.name, c_name, signal_fn))
+                        class_.signals.append(Signal(c_name, params, result, nse.name))
                         output_signal_c_code(c_elem, c_func, handler_func, params, result, cf)
             ml('end')
-            cl('  end')
             ctl('end')
     ml()
     class_printer = ClassPrinter(classes, ml)
