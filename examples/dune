@@ -8,3 +8,8 @@
  (modules example0_oo)
  (libraries ocamlgtk)
 )
+
+(executable (name get_set)
+ (modules get_set)
+ (libraries ocamlgtk)
+)

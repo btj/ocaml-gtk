@@ -376,6 +376,8 @@ def c_to_ml_type(typ, ns, local_env):
     if typ.array:
         # Not supported yet
         return None
+    # TODO: We should not support allow_none either until we have some
+    # mechanism for converting to an option type.
     name = typ.typename
     if name == 'gint32':
         return Types('int', 'Val_long(%s)', 'gint32', 'int', '%s')
@@ -383,6 +385,12 @@ def c_to_ml_type(typ, ns, local_env):
         return Types('int', 'Val_long(%s)', 'guint32', 'int', '%s')
     elif name == 'gboolean':
         return Types('bool', '(%s ? Val_true : Val_false)', 'gboolean', 'bool', '%s')
+    elif name == 'utf8':
+        if typ.allow_none:
+            # TODO: Return a string option
+            return None
+        else:
+            return Types('string', 'caml_copy_string(%s)', 'const char *', 'string', '%s')
     ns_elem = local_env.get(name, None)
     if ns_elem != None:
         if ns_elem.xml.tag == t_enumeration:
