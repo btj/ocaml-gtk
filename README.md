@@ -8,6 +8,7 @@ Generates direct OCaml C bindings using GObject introspection data
 
 * No enumeration / constants mapping
 * No inline docs
+* Currently, impact on binary size is significant: `example0.exe`, a trivial hello-world example, is 4.7M on my Macbook. It is not yet clear whether it will be feasible to improve this significantly. See https://github.com/btj/ocaml-gtk/issues/11.
 
 ## Prerequisites
 
