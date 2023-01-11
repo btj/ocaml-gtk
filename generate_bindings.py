@@ -13,6 +13,7 @@ t_parameters = "{http://www.gtk.org/introspection/core/1.0}parameters"
 t_parameter = "{http://www.gtk.org/introspection/core/1.0}parameter"
 t_return_value = "{http://www.gtk.org/introspection/core/1.0}return-value"
 t_type = "{http://www.gtk.org/introspection/core/1.0}type"
+t_array = "{http://www.gtk.org/introspection/core/1.0}array"
 t_property = "{http://www.gtk.org/introspection/core/1.0}property"
 t_signal = "{http://www.gtk.org/introspection/glib/1.0}signal"
 t_enumeration = "{http://www.gtk.org/introspection/core/1.0}enumeration"
@@ -191,6 +192,39 @@ class Params:
         return p
 
 @dataclass
+class ElementType:
+    typename: str
+    array: bool
+    allow_none: bool
+    transfer_ownership: bool
+    direction: str
+
+    @property
+    def to_str(self):
+        ret = self.typename
+        if self.array:
+            ret += '[]'
+        if self.allow_none:
+            ret += '?'
+        return ret
+
+    @classmethod
+    def make(cls, elem):
+        typ = elem.find(t_type)
+        array = False
+        if typ is None:
+            array_elem = elem.find(t_array)
+            assert array_elem is not None, f"Unknown type {elem}"
+            array = True
+            typ = array_elem.find(t_type)
+            assert typ is not None, f"No type found for {elem}"
+        allow_none = elem.get('allow-none', "0") == "1"
+        transfer_ownership = elem.get('transfer-ownership', None)
+        direction = elem.get('direction', None)
+        typename = typ.attrib['name']
+        return cls(typename, array, allow_none, transfer_ownership, direction)
+
+@dataclass
 class Method:
     name: str
     params: Params
@@ -314,7 +348,10 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
 '''
 
 def ml_to_c_type(typ, ns, local_env):
-    name = typ.attrib.get('name')
+    if typ.array:
+        # Not supported yet
+        return None
+    name = typ.typename
     if name == 'utf8':
         return Types('string', 'String_val(%s)', 'const char *', 'string', '%s')
     elif name == 'gboolean':
@@ -336,7 +373,10 @@ def ml_to_c_type(typ, ns, local_env):
         return None
 
 def c_to_ml_type(typ, ns, local_env):
-    name = typ.attrib['name']
+    if typ.array:
+        # Not supported yet
+        return None
+    name = typ.typename
     if name == 'gint32':
         return Types('int', 'Val_long(%s)', 'gint32', 'int', '%s')
     elif name == 'guint32':
@@ -389,14 +429,6 @@ def output_gobject_types(ns, ml):
             ml('type %s = [%s] obj' % (ns_elem.ml_name,
                 '|'.join('`' + a.c_type_name for a in ancestors)))
 
-def find_type(es, t_type):
-    """Find the element with type tag == t_type"""
-    for e in es:
-        if e.tag == t_type:
-            return e, True
-    # Return the last element if we have not found anything
-    return e, False
-
 def get_method_params(c_elem, c_type_name, ns_elem, ns, local_env):
     params = Params()
     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
@@ -408,31 +440,26 @@ def get_method_params(c_elem, c_type_name, ns_elem, ns, local_env):
             for ps_elem in m_elem:
                 ps_name = ps_elem.attrib['name']
                 assert ps_elem.tag == t_parameter
-                if ps_elem.attrib.get('transfer-ownership', None) != 'none':
+                t = ElementType.make(ps_elem)
+                if t.transfer_ownership != 'none':
                     print_skip(c_elem, ns_elem, 'missing transfer-ownership="none" attribute for parameter %s' % ps_name)
                     return None, None
-                if 'direction' in ps_elem.attrib:
+                if t.direction is not None:
                     print_skip(c_elem, ns_elem, 'explicit "direction" attribute for parameter %s not yet supported' % ps_name)
                     return None, None
-                typ, found = find_type(ps_elem, t_type)
-                if not found:
-                    print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
-                    return None, None
-                types = ml_to_c_type(typ, ns, local_env)
+                types = ml_to_c_type(t, ns, local_env)
                 if types == None:
-                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
+                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (t.to_str, ps_name))
                     return None, None
                 params.append(Param(ps_elem, types))
         elif m_elem.tag == t_return_value:
-            typ, found = find_type(m_elem, t_type)
-            if not found:
-                types = None
-            elif typ.attrib['name'] == 'none':
+            t = ElementType.make(m_elem)
+            if t.typename == 'none':
                 types = Types('unit', 'Val_unit', None, 'unit', '%s')
             else:
-                types = c_to_ml_type(typ, ns, local_env)
+                types = c_to_ml_type(t, ns, local_env)
             if types == None:
-                print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
+                print_skip(c_elem, ns_elem, 'unsupported return type %s' % t.to_str)
                 return None, None
             result = types
     if len(params.params) > 5:
@@ -452,25 +479,20 @@ def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
             for ps_elem in s_elem:
                 assert ps_elem.tag == t_parameter
                 ps_name = ps_elem.attrib['name']
-                typ, found = find_type(ps_elem, t_type)
-                if not found:
-                    print_skip(c_elem, ns_elem, 'no type specified for parameter %s' % ps_name)
-                    return None, None
-                types = c_to_ml_type(typ, ns, local_env)
+                t = ElementType.make(ps_elem)
+                types = c_to_ml_type(t, ns, local_env)
                 if types == None:
-                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (ET.tostring(typ), ps_name))
+                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (t.to_str, ps_name))
                     return None, None
                 params.append(Param(ps_elem, types))
         elif s_elem.tag == t_return_value:
-            typ, found = find_type(s_elem, t_type)
-            if not found:
-                types = None
-            if typ.attrib['name'] == 'none':
+            t = ElementType.make(s_elem)
+            if t.typename == 'none':
                 types = Types('unit', '', 'void', 'unit', '%s')
             else:
-                types = ml_to_c_type(typ, ns, local_env)
+                types = ml_to_c_type(t, ns, local_env)
             if types == None:
-                print_skip(c_elem, ns_elem, 'unsupported return type %s' % ET.tostring(typ))
+                print_skip(c_elem, ns_elem, 'unsupported return type %s' % t.to_str)
                 return None, None
             result = types
     return params, result
