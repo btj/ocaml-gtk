@@ -388,8 +388,7 @@ def c_to_ml_type(typ, ns, local_env):
         return Types('bool', '(%s ? Val_true : Val_false)', 'gboolean', 'bool', '%s')
     elif name == 'utf8':
         if typ.allow_none:
-            # TODO: Return a string option
-            return None
+            return Types('string option', 'Val_string_option(%s)', 'const char *', 'string option', '%s')
         else:
             return Types('string', 'caml_copy_string(%s)', 'const char *', 'string', '%s')
     ns_elem = local_env.get(name, None)
