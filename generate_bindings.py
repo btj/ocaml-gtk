@@ -407,11 +407,6 @@ def c_to_ml_type(typ, ns, local_env):
     else:
         return None
 
-def print_skip(c_elem, ns_elem, reason):
-    c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-    skip = 'Skipping %s %s of class %s' % (c_elem_tag, c_elem.attrib['name'], ns_elem.attrib['name'])
-    print('%s: %s' % (skip, reason))
-
 def output_gobject_types(ns, ml):
     for ns_elem_name, ns_elem in ns.elems.items():
         if ns_elem.xml.tag != t_class:
@@ -441,73 +436,115 @@ def output_gobject_types(ns, ml):
             ml('type %s = [%s] obj' % (ns_elem.ml_name,
                 '|'.join('`' + a.c_type_name for a in ancestors)))
 
-def get_method_params(c_elem, c_type_name, ns_elem, ns, local_env):
-    params = Params()
-    c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-    if c_elem_tag == 'method':
-        params.append(CMethodParam(c_type_name))
-    result = None
-    for m_elem in c_elem:
-        if m_elem.tag == t_parameters:
-            for ps_elem in m_elem:
-                ps_name = ps_elem.attrib['name']
-                assert ps_elem.tag == t_parameter
-                t = ElementType.make(ps_elem)
-                if t.transfer_ownership != 'none':
-                    print_skip(c_elem, ns_elem, 'missing transfer-ownership="none" attribute for parameter %s' % ps_name)
-                    return None, None
-                if t.direction is not None:
-                    print_skip(c_elem, ns_elem, 'explicit "direction" attribute for parameter %s not yet supported' % ps_name)
-                    return None, None
-                types = ml_to_c_type(t, ns, local_env)
-                if types == None:
-                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (t.to_str, ps_name))
-                    return None, None
-                params.append(Param(ps_elem, types))
-        elif m_elem.tag == t_return_value:
-            t = ElementType.make(m_elem)
-            if t.typename == 'none':
-                types = Types('unit', 'Val_unit', None, 'unit', '%s')
-            else:
-                types = c_to_ml_type(t, ns, local_env)
-            if types == None:
-                print_skip(c_elem, ns_elem, 'unsupported return type %s' % t.to_str)
-                return None, None
-            result = types
-    if len(params.params) > 5:
-        # Skip for now; requires separate C functions for the bytecode runtime and the native code runtime
-        print_skip(c_elem, ns_elem, 'has more than 5 parameters')
-        return None, None
-    if c_elem.attrib[a_identifier] in c_functions_to_skip:
-        return None, None
-    return params, result
+class BaseMethodParser:
+    """Parse method params and return value from xml definition."""
 
-def get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env):
-    params = Params()
-    result = None
-    skip = False
-    for s_elem in c_elem:
-        if s_elem.tag == t_parameters:
-            for ps_elem in s_elem:
-                assert ps_elem.tag == t_parameter
-                ps_name = ps_elem.attrib['name']
-                t = ElementType.make(ps_elem)
-                types = c_to_ml_type(t, ns, local_env)
+    def __init__(self, elem, class_elem, ns, local_env):
+        self.elem = elem
+        self.class_name = class_elem.attrib['name']
+        self.ns = ns
+        self.local_env = local_env
+        self.params = Params()
+        self.result = None
+
+    def parse(self):
+        if not self.get_params_and_return():
+            return None, None
+        if not self.validate():
+            return None, None
+        return self.params, self.result
+
+    def print_skip(self, reason):
+        elem_tag = 'constructor' if self.elem.tag == t_constructor else 'method'
+        elem_name = self.elem.attrib['name']
+        skip = 'Skipping %s %s of class %s' % (elem_tag, elem_name, self.class_name)
+        print('%s: %s' % (skip, reason))
+
+    def c_to_ml_type(self, t):
+        return c_to_ml_type(t, self.ns, self.local_env)
+
+    def ml_to_c_type(self, t):
+        return ml_to_c_type(t, self.ns, self.local_env)
+
+    def get_params_and_return(self):
+        for m_elem in self.elem:
+            if m_elem.tag == t_parameters:
+                for ps_elem in m_elem:
+                    assert ps_elem.tag == t_parameter
+                    ps_name = ps_elem.attrib['name']
+                    t = ElementType.make(ps_elem)
+                    if not self.validate_param(t, ps_name):
+                        return False
+                    types = self.get_param_types(t)
+                    if types == None:
+                        self.print_skip('unsupported type %s of parameter %s' % (t.to_str, ps_name))
+                        return False
+                    self.params.append(Param(ps_elem, types))
+            elif m_elem.tag == t_return_value:
+                t = ElementType.make(m_elem)
+                types = self.get_return_types(t)
                 if types == None:
-                    print_skip(c_elem, ns_elem, 'unsupported type %s of parameter %s' % (t.to_str, ps_name))
-                    return None, None
-                params.append(Param(ps_elem, types))
-        elif s_elem.tag == t_return_value:
-            t = ElementType.make(s_elem)
-            if t.typename == 'none':
-                types = Types('unit', '', 'void', 'unit', '%s')
-            else:
-                types = ml_to_c_type(t, ns, local_env)
-            if types == None:
-                print_skip(c_elem, ns_elem, 'unsupported return type %s' % t.to_str)
-                return None, None
-            result = types
-    return params, result
+                    self.print_skip('unsupported return type %s' % t.to_str)
+                    return False
+                self.result = types
+        return True
+
+    def get_param_types(self, t):
+        raise NotImplementedError()
+
+    def get_return_types(self, t):
+        raise NotImplementedError()
+
+    def validate_param(self, t, ps_name):
+        return True
+
+    def validate(self):
+        return True
+
+class MethodParser(BaseMethodParser):
+    def __init__(self, elem, c_type_name, class_elem, ns, local_env):
+        super().__init__(elem, class_elem, ns, local_env)
+        self.is_constructor = elem.tag == t_constructor
+        if not self.is_constructor:
+            self.params.append(CMethodParam(c_type_name))
+
+    def get_param_types(self, t):
+        return self.ml_to_c_type(t)
+
+    def get_return_types(self, t):
+        if t.typename == 'none':
+            return Types('unit', 'Val_unit', None, 'unit', '%s')
+        else:
+            return self.c_to_ml_type(t)
+
+    def validate_param(self, t, ps_name):
+        if t.transfer_ownership != 'none':
+            self.print_skip('missing transfer-ownership="none" attribute for parameter %s' % ps_name)
+            return False
+        if t.direction is not None:
+            self.print_skip('explicit "direction" attribute for parameter %s not yet supported' % ps_name)
+            return False
+        return True
+
+    def validate(self):
+        if len(self.params.params) > 5:
+            # Skip for now; requires separate C functions for the bytecode
+            # runtime and the native code runtime
+            self.print_skip('has more than 5 parameters')
+            return False
+        if self.elem.attrib[a_identifier] in c_functions_to_skip:
+            return False
+        return True
+
+class SignalParser(BaseMethodParser):
+    def get_param_types(self, t):
+        return self.c_to_ml_type(t)
+
+    def get_return_types(self, t):
+        if t.typename == 'none':
+            return Types('unit', '', 'void', 'unit', '%s')
+        else:
+            return self.ml_to_c_type(t)
 
 def output_method_c_code(c_elem, c_func, params, result, cf):
     cf()
@@ -620,7 +657,8 @@ def process_namespace(namespace, env):
                     pass
                 elif c_elem.tag == t_constructor or c_elem.tag == t_method:
                     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-                    params, result = get_method_params(c_elem, c_type_name, ns_elem, ns, local_env)
+                    parser = MethodParser(c_elem, c_type_name, ns_elem, ns, local_env)
+                    params, result = parser.parse()
                     if params:
                         if c_elem_tag == 'constructor':
                             expected_result = Types(nse.ml_name, 'Val_GObject((void *)(%s))', 'void *', None, None)
@@ -655,7 +693,8 @@ def process_namespace(namespace, env):
                         class_.methods.append(GioApplicationRunMethod())
                         cf(_GIO_APPLICATION_RUN)
                 elif c_elem.tag == t_signal:
-                    params, result = get_signal_params(c_elem, c_type_name, ns_elem, ns, local_env)
+                    parser = SignalParser(c_elem, ns_elem, ns, local_env)
+                    params, result = parser.parse()
                     if params:
                         c_name = c_elem.attrib['name'].replace('-', '_')
                         prefix = 'ml_%s_%s' % (namespace_name, ns_elem.attrib['name'])
