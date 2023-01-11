@@ -281,6 +281,7 @@ _C_HEADERS = '''\
 #include <gio/gunixmounts.h>
 #include <gio/gunixoutputstream.h>
 #include <gio/gunixsocketaddress.h>
+#include <gio/gosxappinfo.h>
 #include <gtk/gtk.h>
 #include <gtk/gtkunixprint.h>
 #define CAML_NAME_SPACE
