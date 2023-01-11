@@ -3,7 +3,7 @@ name: CI
 on: ["push", "pull_request"]
 
 jobs:
-  build:
+  build-ubuntu:
 
     runs-on: ubuntu-22.04
 
@@ -24,3 +24,24 @@ jobs:
         dune build
       env:
         PREFIX: /usr/lib/x86_64-linux-gnu
+
+  build-macos:
+
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install required Homebrew packages
+      run: |
+        brew install gtk4 gobject-introspection
+    - name: Install OPAM
+      run: |
+        echo '' | bash -c "sh <(curl -fsSL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)"
+        opam init
+        opam install -y dune dune-configurator
+    - name: Build ocaml-gtk
+      run: |
+        eval `opam env`
+        dune build
+      env:
+        PREFIX: /usr/local/lib
