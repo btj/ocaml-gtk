@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 import xml.etree.ElementTree as ET
 
 c_functions_to_skip = {'g_io_module_load', 'g_io_module_unload'} # https://gitlab.gnome.org/GNOME/glib/-/issues/2498
@@ -196,8 +197,8 @@ class ElementType:
     typename: str
     array: bool
     allow_none: bool
-    transfer_ownership: bool
-    direction: str
+    transfer_ownership: Optional[str]
+    direction: Optional[str]
 
     @property
     def to_str(self):
