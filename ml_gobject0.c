@@ -43,11 +43,10 @@ value Val_GObject(GObject *obj) {
 
 value Val_string_option(char *s) {
   CAMLparam0();
+  CAMLlocal2(ml_s, result);
   if (s) {
-    CAMLlocal2(ml_s, result);
     ml_s = caml_copy_string(s);
-    result = caml_alloc(1, 0);
-    Store_field(result, 0, ml_s);
+    result = caml_alloc_some(ml_s);
     CAMLreturn(result);
   } else {
     CAMLreturn(Val_none);
