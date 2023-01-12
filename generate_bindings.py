@@ -328,7 +328,7 @@ _C_HEADERS = '''\
 #include "ml_gobject0.h"\
 '''
 
-if platform.system == 'Darwin':
+if platform.system() == 'Darwin':
     _C_HEADERS += "\n#include <gio/gosxappinfo.h>"
 
 
