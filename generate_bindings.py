@@ -83,6 +83,7 @@ class NamespaceElement:
         self.qualified_name = ns.name + '.' + self.name
         c_type_name = xml.attrib.get(a_type_name, None)
         self.c_type_name = 'GParamSpec' if c_type_name == 'GParam' else c_type_name
+        self.c_method_prefix = 'ml_%s_%s' % (ns.name, self.name)
 
     def ml_name0_for(self, other_ns):
         if other_ns is self.ns:
@@ -284,6 +285,19 @@ class Class:
         lines.append('  end')
         return lines
 
+    @classmethod
+    def make(self, nse):
+        if nse.parent and nse.parent.ns is nse.ns:
+            cls = Class(nse.ml_name0, nse.parent.ml_name0)
+        else:
+            cls = Class(nse.ml_name0, None)
+        cls.self_type = nse.ml_name
+        if nse.parent_name is not None:
+            qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.name + '.'
+            cls.inherit = (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_')
+        cls.c_type_name = nse.c_type_name
+        return cls
+
 class ClassPrinter:
     def __init__(self, classes, ml):
         self.classes = classes
@@ -352,7 +366,7 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
 }
 '''
 
-def ml_to_c_type(typ, ns, local_env):
+def ml_to_c_type(typ, ns):
     if typ.array:
         # Not supported yet
         return None
@@ -365,7 +379,7 @@ def ml_to_c_type(typ, ns, local_env):
         return Types('int', 'Long_val(%s)', 'gint32', 'int', '%s')
     elif name == 'guint32':
         return Types('int', 'Long_val(%s)', 'guint32', 'int', '%s')
-    ns_elem = local_env.get(name, None)
+    ns_elem = ns.local_env.get(name, None)
     if ns_elem is not None:
         if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
             return Types('int', 'Int_val(%s)', 'int', 'int', '%s')
@@ -377,7 +391,7 @@ def ml_to_c_type(typ, ns, local_env):
     else:
         return None
 
-def c_to_ml_type(typ, ns, local_env):
+def c_to_ml_type(typ, ns):
     if typ.array:
         # Not supported yet
         return None
@@ -395,7 +409,7 @@ def c_to_ml_type(typ, ns, local_env):
             return Types('string option', 'Val_string_option(%s)', 'const char *', 'string option', '%s')
         else:
             return Types('string', 'caml_copy_string(%s)', 'const char *', 'string', '%s')
-    ns_elem = local_env.get(name, None)
+    ns_elem = ns.local_env.get(name, None)
     if ns_elem != None:
         if ns_elem.xml.tag == t_enumeration:
             return Types('int', 'Val_int(%s)', 'int', 'int', '%s')
@@ -439,11 +453,10 @@ def output_gobject_types(ns, ml):
 class BaseMethodParser:
     """Parse method params and return value from xml definition."""
 
-    def __init__(self, elem, class_elem, ns, local_env):
+    def __init__(self, elem, class_elem, ns):
         self.elem = elem
         self.class_name = class_elem.attrib['name']
         self.ns = ns
-        self.local_env = local_env
         self.params = Params()
         self.result = None
 
@@ -461,10 +474,10 @@ class BaseMethodParser:
         print('%s: %s' % (skip, reason))
 
     def c_to_ml_type(self, t):
-        return c_to_ml_type(t, self.ns, self.local_env)
+        return c_to_ml_type(t, self.ns)
 
     def ml_to_c_type(self, t):
-        return ml_to_c_type(t, self.ns, self.local_env)
+        return ml_to_c_type(t, self.ns)
 
     def get_params_and_return(self):
         for m_elem in self.elem:
@@ -502,8 +515,8 @@ class BaseMethodParser:
         return True
 
 class MethodParser(BaseMethodParser):
-    def __init__(self, elem, c_type_name, class_elem, ns, local_env):
-        super().__init__(elem, class_elem, ns, local_env)
+    def __init__(self, elem, c_type_name, class_elem, ns):
+        super().__init__(elem, class_elem, ns)
         self.is_constructor = elem.tag == t_constructor
         if not self.is_constructor:
             self.params.append(CMethodParam(c_type_name))
@@ -545,6 +558,7 @@ class SignalParser(BaseMethodParser):
             return Types('unit', '', 'void', 'unit', '%s')
         else:
             return self.ml_to_c_type(t)
+
 
 def output_method_c_code(c_elem, c_func, params, result, cf):
     cf()
@@ -603,11 +617,12 @@ def output_signal_c_code(c_elem, c_func, handler_func, params, result, cf):
 NAMESPACES = {}
 
 def process_namespace(namespace, env):
-    namespace_name = namespace.attrib['name']
-    ml_file = open(namespace_name + '.ml', 'w')
+    ns = Namespace(env, namespace)
+    NAMESPACES[ns.name] = ns
+    ml_file = open(ns.name + '.ml', 'w')
     def ml(*args):
         print(*args, file=ml_file)
-    c_file = open('ml_' + namespace_name + '.c', 'w')
+    c_file = open('ml_' + ns.name + '.c', 'w')
     def cf(*args):
         print(*args, file=c_file)
     ml('[@@@alert "-unsafe"]')
@@ -615,9 +630,6 @@ def process_namespace(namespace, env):
     ml('open Gobject0')
     ml()
     cf(_C_HEADERS)
-    ns = Namespace(env, namespace)
-    local_env = ns.local_env
-    NAMESPACES[namespace_name] = ns
     output_gobject_types(ns, ml)
     classes = {}
     ctors_lines = []
@@ -633,76 +645,68 @@ def process_namespace(namespace, env):
                     ml('  let %s = %s' % (escape_ml_keyword(bf_elem.attrib['name']), bf_elem.attrib['value']))
             ml('end')
         elif ns_elem.tag == t_class:
-            nse = local_env[ns_elem.attrib['name']]
+            nse = ns.local_env[ns_elem.attrib['name']]
             if not nse.is_GObject:
                 continue
-            if nse.parent and nse.parent.ns is nse.ns:
-                class_ = Class(nse.ml_name0, nse.parent.ml_name0)
-            else:
-                class_ = Class(nse.ml_name0, None)
-            classes[nse.ml_name0] = class_
-            c_type_name = nse.c_type_name
+            cls = Class.make(nse)
+            classes[cls.name] = cls
             ml()
-            ml('module %s_ = struct' % ns_elem.attrib['name'])
-            ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (c_type_name, nse.ml_name))
-            class_.self_type = nse.ml_name
-            if nse.parent_name is not None:
-                qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.name + '.'
-                class_.inherit = (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_')
-            class_.c_type_name = c_type_name
+            ml('module %s_ = struct' % nse.name)
+            ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (cls.c_type_name, cls.self_type))
             ctl('')
-            ctl('module %s = struct' % ns_elem.attrib['name'])
+            ctl('module %s = struct' % nse.name)
             for c_elem in ns_elem:
+                c_elem_name = c_elem.attrib['name']
                 if c_elem.tag == t_attribute:
                     pass
                 elif c_elem.tag == t_constructor or c_elem.tag == t_method:
                     c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
-                    parser = MethodParser(c_elem, c_type_name, ns_elem, ns, local_env)
+                    parser = MethodParser(c_elem, cls.c_type_name, ns_elem, ns)
                     params, result = parser.parse()
                     if params:
                         if c_elem_tag == 'constructor':
-                            expected_result = Types(nse.ml_name, 'Val_GObject((void *)(%s))', 'void *', None, None)
+                            expected_result = Types(cls.self_type, 'Val_GObject((void *)(%s))', 'void *', None, None)
                             if result != expected_result:
                                 if result.ml_type not in ['widget', 'Gtk.widget']:
                                     print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' %
-                                          (c_elem.attrib['name'], ns.name + '.' + ns_elem.attrib['name']))
+                                          (c_elem_name, nse.qualified_name))
                                 result = expected_result
-                        c_func = 'ml_%s_%s_%s' % (namespace_name, ns_elem.attrib['name'], c_elem.attrib['name'])
-                        ml_func = escape_ml_keyword(c_elem.attrib['name'])
+                        c_func = '%s_%s' % (nse.c_method_prefix, c_elem_name)
+                        ml_func = escape_ml_keyword(c_elem_name)
                         ml('  external %s: %s -> %s = "%s"' % (ml_func, params.method_types(), result.ml_type, c_func))
                         if c_elem_tag == 'constructor':
                             params_text = params.ctor_params()
                             args_text = params.ctor_args()
-                            new = 'new %s (%s_.%s %s)' % (nse.ml_name0, nse.name, ml_func, args_text)
+                            new = 'new %s (%s_.%s %s)' % (cls.name, nse.name, ml_func, args_text)
                             ctl('  let %s %s = %s' % (ml_func, params_text, new))
                             if c_elem.attrib['name'] == 'new':
-                                ctor = 'let %s %s = %s' % (nse.ml_name0, params_text, new)
+                                ctor = 'let %s %s = %s' % (cls.name, params_text, new)
                                 default_ctors_lines.append(ctor)
                         else:
                             mparams = params.drop_first()
-                            if ns.name == 'Gtk' and nse.name == 'Widget' and ml_func == 'get_settings':
+                            if nse.qualified_name == 'Gtk.Widget' and ml_func == 'get_settings':
                                 # To work around a weird OCaml compiler error message
                                 method_name = ml_func + '_'
                             else:
                                 method_name = ml_func
-                            class_.methods.append(Method(method_name, mparams, result, ml_func, nse.name))
+                            cls.methods.append(Method(method_name, mparams, result, ml_func, nse.name))
 
                         output_method_c_code(c_elem, c_func, params, result, cf)
-                    elif ns.name == 'Gio' and ns_elem.attrib['name'] == 'Application' and c_elem.attrib['name'] == 'run':
+                    elif nse.qualified_name == 'Gio.Application' and c_elem_name == 'run':
                         ml('  external run: [>`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
-                        class_.methods.append(GioApplicationRunMethod())
+                        cls.methods.append(GioApplicationRunMethod())
                         cf(_GIO_APPLICATION_RUN)
                 elif c_elem.tag == t_signal:
-                    parser = SignalParser(c_elem, ns_elem, ns, local_env)
+                    parser = SignalParser(c_elem, ns_elem, ns)
                     params, result = parser.parse()
                     if params:
-                        c_name = c_elem.attrib['name'].replace('-', '_')
-                        prefix = 'ml_%s_%s' % (namespace_name, ns_elem.attrib['name'])
+                        c_name = c_elem_name.replace('-', '_')
+                        prefix = nse.c_method_prefix
                         handler_func = '%s_signal_handler_%s' % (prefix, c_name)
                         c_func = '%s_signal_connect_%s' % (prefix, c_name)
                         ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' %
-                           (c_name, nse.c_type_name, params.method_types(), result.ml_type, c_func))
-                        class_.signals.append(Signal(c_name, params, result, nse.name))
+                           (c_name, cls.c_type_name, params.method_types(), result.ml_type, c_func))
+                        cls.signals.append(Signal(c_name, params, result, nse.name))
                         output_signal_c_code(c_elem, c_func, handler_func, params, result, cf)
             ml('end')
             ctl('end')
