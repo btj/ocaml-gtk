@@ -247,6 +247,40 @@ class GioApplicationRunMethod:
         return 'method run argv = Application_.run self argv'
 
 @dataclass
+class Constructor:
+    name: str
+    cls: 'Class'
+    nse: NamespaceElement
+    params: Params
+    result: Types
+
+    def __init__(self, name, cls, nse, params, result):
+        self.name = name
+        self.cls = cls
+        self.nse = nse
+        self.params = params
+        self.set_expected_result(result)
+
+    def set_expected_result(self, result):
+        expected_result = Types(self.cls.self_type, 'Val_GObject((void *)(%s))', 'void *', None, None)
+        if result != expected_result and result.ml_type not in ['widget', 'Gtk.widget']:
+            print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' %
+                  (self.name, self.nse.qualified_name))
+        self.result = expected_result
+
+    def ml_lines(self):
+        params_text = self.params.ctor_params()
+        args_text = self.params.ctor_args()
+        ml_func = escape_ml_keyword(self.name)
+        new = 'new %s (%s_.%s %s)' % (self.cls.name, self.nse.name, ml_func, args_text)
+        ctor = '  let %s %s = %s' % (ml_func, params_text, new)
+        if self.name == 'new':
+            default = 'let %s %s = %s' % (self.cls.name, params_text, new)
+        else:
+            default = None
+        return ctor, default
+
+@dataclass
 class Signal:
     name: str
     params: Params
@@ -262,16 +296,26 @@ class Signal:
                 (method_name, self.params.signal_types(), self.result.oo_type, body))
 
 class Class:
-    def __init__(self, name, parent):
-        self.name = name
-        self.parent = parent
+    def __init__(self, nse):
+        self.nse = nse
+        self.name = nse.ml_name0
+        self.self_type = nse.ml_name
+        self.c_type_name = nse.c_type_name
+        self.parent = None
+        self.inherit = None
+        self.fill_parent_details(nse)
         self.printed = False
         # Will be filled in while reading the xml file
-        self.self_type = None
-        self.inherit = None
-        self.c_type_name = None
         self.methods = []
         self.signals = []
+        self.constructors = []
+
+    def fill_parent_details(self, nse):
+        if nse.parent and nse.parent.ns is nse.ns:
+            self.parent = nse.parent.ml_name0
+        if nse.parent_name is not None:
+            qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.name + '.'
+            self.inherit = (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_')
 
     def ml_lines(self):
         lines = [
@@ -285,18 +329,19 @@ class Class:
         lines.append('  end')
         return lines
 
-    @classmethod
-    def make(self, nse):
-        if nse.parent and nse.parent.ns is nse.ns:
-            cls = Class(nse.ml_name0, nse.parent.ml_name0)
-        else:
-            cls = Class(nse.ml_name0, None)
-        cls.self_type = nse.ml_name
-        if nse.parent_name is not None:
-            qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.name + '.'
-            cls.inherit = (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_')
-        cls.c_type_name = nse.c_type_name
-        return cls
+    def constructor_lines(self):
+        ctor_lines = [
+            '',
+            'module %s = struct' % self.nse.name,
+        ]
+        default_lines = []
+        for c in self.constructors:
+            ctor, default = c.ml_lines()
+            ctor_lines.append(ctor)
+            if default:
+                default_lines.append(default)
+        ctor_lines.append('end')
+        return ctor_lines, default_lines
 
 class ClassPrinter:
     def __init__(self, classes, ml):
@@ -559,6 +604,12 @@ class SignalParser(BaseMethodParser):
         else:
             return self.ml_to_c_type(t)
 
+def output_method_code(c_elem, nse, params, result, ml, cf):
+    c_elem_name = c_elem.attrib['name']
+    c_func = '%s_%s' % (nse.c_method_prefix, c_elem_name)
+    ml_func = escape_ml_keyword(c_elem_name)
+    ml('  external %s: %s -> %s = "%s"' % (ml_func, params.method_types(), result.ml_type, c_func))
+    output_method_c_code(c_elem, c_func, params, result, cf)
 
 def output_method_c_code(c_elem, c_func, params, result, cf):
     cf()
@@ -586,6 +637,15 @@ def output_method_c_code(c_elem, c_func, params, result, cf):
         cf('  if (err) { exn_msg = caml_copy_string(err->message); g_error_free(err); caml_failwith_value(exn_msg); }')
     cf('  CAMLreturn(%s);' % ml_result)
     cf('}')
+
+def output_signal_code(c_elem, nse, params, result, ml, cf):
+    c_name = c_elem.attrib['name'].replace('-', '_')
+    prefix = nse.c_method_prefix
+    handler_func = '%s_signal_handler_%s' % (prefix, c_name)
+    c_func = '%s_signal_connect_%s' % (prefix, c_name)
+    ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' %
+       (c_name, nse.c_type_name, params.method_types(), result.ml_type, c_func))
+    output_signal_c_code(c_elem, c_func, handler_func, params, result, cf)
 
 def output_signal_c_code(c_elem, c_func, handler_func, params, result, cf):
     cf()
@@ -634,8 +694,6 @@ def process_namespace(namespace, env):
     classes = {}
     ctors_lines = []
     default_ctors_lines = []
-    def ctl(line):
-        ctors_lines.append(line)
     for ns_elem in namespace:
         if ns_elem.tag == t_bitfield or ns_elem.tag == t_enumeration:
             ml()
@@ -648,50 +706,36 @@ def process_namespace(namespace, env):
             nse = ns.local_env[ns_elem.attrib['name']]
             if not nse.is_GObject:
                 continue
-            cls = Class.make(nse)
+            cls = Class(nse)
             classes[cls.name] = cls
             ml()
             ml('module %s_ = struct' % nse.name)
             ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (cls.c_type_name, cls.self_type))
-            ctl('')
-            ctl('module %s = struct' % nse.name)
             for c_elem in ns_elem:
                 c_elem_name = c_elem.attrib['name']
                 if c_elem.tag == t_attribute:
                     pass
-                elif c_elem.tag == t_constructor or c_elem.tag == t_method:
-                    c_elem_tag = 'constructor' if c_elem.tag == t_constructor else 'method'
+                elif c_elem.tag == t_constructor:
                     parser = MethodParser(c_elem, cls.c_type_name, ns_elem, ns)
                     params, result = parser.parse()
                     if params:
-                        if c_elem_tag == 'constructor':
-                            expected_result = Types(cls.self_type, 'Val_GObject((void *)(%s))', 'void *', None, None)
-                            if result != expected_result:
-                                if result.ml_type not in ['widget', 'Gtk.widget']:
-                                    print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' %
-                                          (c_elem_name, nse.qualified_name))
-                                result = expected_result
-                        c_func = '%s_%s' % (nse.c_method_prefix, c_elem_name)
+                        constructor = Constructor(c_elem_name, cls, nse, params, result)
+                        cls.constructors.append(constructor)
+                        result = constructor.result
+                        output_method_code(c_elem, nse, params, result, ml, cf)
+                elif c_elem.tag == t_method:
+                    parser = MethodParser(c_elem, cls.c_type_name, ns_elem, ns)
+                    params, result = parser.parse()
+                    if params:
                         ml_func = escape_ml_keyword(c_elem_name)
-                        ml('  external %s: %s -> %s = "%s"' % (ml_func, params.method_types(), result.ml_type, c_func))
-                        if c_elem_tag == 'constructor':
-                            params_text = params.ctor_params()
-                            args_text = params.ctor_args()
-                            new = 'new %s (%s_.%s %s)' % (cls.name, nse.name, ml_func, args_text)
-                            ctl('  let %s %s = %s' % (ml_func, params_text, new))
-                            if c_elem.attrib['name'] == 'new':
-                                ctor = 'let %s %s = %s' % (cls.name, params_text, new)
-                                default_ctors_lines.append(ctor)
+                        mparams = params.drop_first()
+                        if nse.qualified_name == 'Gtk.Widget' and ml_func == 'get_settings':
+                            # To work around a weird OCaml compiler error message
+                            method_name = ml_func + '_'
                         else:
-                            mparams = params.drop_first()
-                            if nse.qualified_name == 'Gtk.Widget' and ml_func == 'get_settings':
-                                # To work around a weird OCaml compiler error message
-                                method_name = ml_func + '_'
-                            else:
-                                method_name = ml_func
-                            cls.methods.append(Method(method_name, mparams, result, ml_func, nse.name))
-
-                        output_method_c_code(c_elem, c_func, params, result, cf)
+                            method_name = ml_func
+                        cls.methods.append(Method(method_name, mparams, result, ml_func, nse.name))
+                        output_method_code(c_elem, nse, params, result, ml, cf)
                     elif nse.qualified_name == 'Gio.Application' and c_elem_name == 'run':
                         ml('  external run: [>`GApplication] obj -> string array -> int = "ml_Gio_Application_run"')
                         cls.methods.append(GioApplicationRunMethod())
@@ -701,15 +745,13 @@ def process_namespace(namespace, env):
                     params, result = parser.parse()
                     if params:
                         c_name = c_elem_name.replace('-', '_')
-                        prefix = nse.c_method_prefix
-                        handler_func = '%s_signal_handler_%s' % (prefix, c_name)
-                        c_func = '%s_signal_connect_%s' % (prefix, c_name)
-                        ml('  external signal_connect_%s: [>`%s] obj -> (%s -> %s) -> int = "%s"' %
-                           (c_name, cls.c_type_name, params.method_types(), result.ml_type, c_func))
                         cls.signals.append(Signal(c_name, params, result, nse.name))
-                        output_signal_c_code(c_elem, c_func, handler_func, params, result, cf)
+                        output_signal_code(c_elem, nse, params, result, ml, cf)
             ml('end')
-            ctl('end')
+            # Collect the ML lines for the class constructors
+            ctor_lines, default = cls.constructor_lines()
+            ctors_lines.extend(ctor_lines)
+            default_ctors_lines.extend(default)
     ml()
     class_printer = ClassPrinter(classes, ml)
     for class_ in classes.values():
