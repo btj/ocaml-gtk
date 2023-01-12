@@ -9,5 +9,5 @@ value Val_GObject(GObject *obj);
 
 value ml_GObject_signal_connect(value instance, const char *signal, void *c_handler, value callback);
 
-value Val_string_option(char *s);
+value Val_string_option(const char *s);
 #endif

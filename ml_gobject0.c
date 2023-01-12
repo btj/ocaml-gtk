@@ -41,7 +41,7 @@ value Val_GObject(GObject *obj) {
   return result;
 }
 
-value Val_string_option(char *s) {
+value Val_string_option(const char *s) {
   CAMLparam0();
   CAMLlocal2(ml_s, result);
   if (s) {
