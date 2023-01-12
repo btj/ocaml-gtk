@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import platform
 from typing import Optional
 import xml.etree.ElementTree as ET
 
@@ -326,6 +327,9 @@ _C_HEADERS = '''\
 #include <caml/fail.h>
 #include "ml_gobject0.h"\
 '''
+
+if platform.system == 'Darwin':
+    _C_HEADERS += "\n#include <gio/gosxappinfo.h>"
 
 
 _GIO_APPLICATION_RUN = '''
