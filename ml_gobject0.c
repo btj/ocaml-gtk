@@ -4,6 +4,7 @@
 #include <gtk/gtk.h>
 #define CAML_NAME_SPACE
 #include <caml/mlvalues.h>
+#include <caml/alloc.h>
 #include <caml/memory.h>
 #include <caml/callback.h>
 #include <caml/custom.h>
@@ -38,6 +39,18 @@ value Val_GObject(GObject *obj) {
   // Do 1 full GC per 100 allocations.
   GObject_val(result) = obj;
   return result;
+}
+
+value Val_string_option(const char *s) {
+  CAMLparam0();
+  CAMLlocal2(ml_s, result);
+  if (s) {
+    ml_s = caml_copy_string(s);
+    result = caml_alloc_some(ml_s);
+    CAMLreturn(result);
+  } else {
+    CAMLreturn(Val_none);
+  }
 }
 
 void dispose_signal_handler(void *callbackCell, GClosure *closure) {
