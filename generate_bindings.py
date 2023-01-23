@@ -9,6 +9,8 @@ t_include = "{http://www.gtk.org/introspection/core/1.0}include"
 t_namespace = "{http://www.gtk.org/introspection/core/1.0}namespace"
 t_class = "{http://www.gtk.org/introspection/core/1.0}class"
 t_constant = "{http://www.gtk.org/introspection/core/1.0}constant"
+t_interface = "{http://www.gtk.org/introspection/core/1.0}interface"
+t_implements = "{http://www.gtk.org/introspection/core/1.0}implements"
 t_attribute = "{http://www.gtk.org/introspection/core/1.0}attribute"
 t_constructor = "{http://www.gtk.org/introspection/core/1.0}constructor"
 t_method = "{http://www.gtk.org/introspection/core/1.0}method"
@@ -85,6 +87,7 @@ class NamespaceElement:
         c_type_name = xml.attrib.get(a_type_name, None)
         self.c_type_name = 'GParamSpec' if c_type_name == 'GParam' else c_type_name
         self.c_method_prefix = 'ml_%s_%s' % (ns.name, self.name)
+        self.interfaces = []
 
     def ml_name0_for(self, other_ns):
         if other_ns is self.ns:
@@ -311,8 +314,8 @@ class Class:
         self.name = nse.ml_name0
         self.self_type = nse.ml_name
         self.c_type_name = nse.c_type_name
-        self.parent = None
-        self.inherit = None
+        self.parents = []
+        self.inherit = []
         self.fill_parent_details(nse)
         self.printed = False
         # Will be filled in while reading the xml file
@@ -322,19 +325,28 @@ class Class:
 
     def fill_parent_details(self, nse):
         if nse.parent and nse.parent.ns is nse.ns:
-            self.parent = nse.parent.ml_name0
+            self.parents.append(nse.parent.ml_name0)
         if nse.parent_name is not None:
             qualifier = '' if nse.parent.ns is nse.ns else nse.parent.ns.name + '.'
-            self.inherit = (qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_')
+            self.inherit = [(qualifier + nse.parent.ml_name0, qualifier + nse.parent.name + '_')]
+        # Not generating 'inherit' lines for implemented interfaces because there are some cases where an interface declares a method with the same name but different type
+        #for itf in nse.interfaces:
+        #    qualifier = '' if itf.ns is nse.ns else itf.ns.name + '.'
+        #    self.inherit.append((qualifier + itf.ml_name0, qualifier + itf.name + '_'))
+        #    if itf.ns is nse.ns:
+        #        self.parents.append(itf.ml_name0)
 
     def ml_lines(self):
         lines = [
             '%s (self: %s) =' % (self.name, self.self_type),
             '  object',
         ]
-        if self.inherit:
-            lines.append('    inherit %s (%s.upcast self)' % self.inherit)
+        for inherit in self.inherit:
+            lines.append('    inherit %s (%s.upcast self)' % inherit)
         lines.append('    method as_%s = self' % self.c_type_name)
+        for itf in self.nse.interfaces: # Not generating 'inherit' lines for implemented interfaces because there are some cases where an interface declares a method with the same name but different type
+            qualifier = '' if itf.ns is self.nse.ns else itf.ns.name + '.'
+            lines.append('    method as_%s = new %s (%s.upcast self)' % (itf.c_type_name, qualifier + itf.ml_name0, qualifier + itf.name + '_'))
         lines += ['    ' + x.to_ml() for x in (self.methods + self.signals)]
         lines.append('  end')
         return lines
@@ -363,8 +375,8 @@ class ClassPrinter:
         if class_.printed:
             return
         class_.printed = True
-        if class_.parent is not None:
-            self.print_class(self.classes[class_.parent])
+        for parent in class_.parents:
+            self.print_class(self.classes[parent])
         first, *rest = class_.ml_lines()
         if self.is_first_class:
             self.ml('class ' + first)
@@ -377,6 +389,7 @@ class ClassPrinter:
 
 _C_HEADERS = '''\
 #define G_SETTINGS_ENABLE_BACKEND
+#include <gio/gfiledescriptorbased.h>
 #include <gio/gsettingsbackend.h>
 #include <gio/gunixconnection.h>
 #include <gio/gunixcredentialsmessage.h>
@@ -445,7 +458,7 @@ def ml_to_c_type(typ, ns):
     if ns_elem is not None:
         if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
             return Types('int', 'Int_val(%s)', 'int', 'int', '%s')
-        elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
+        elif ns_elem.xml.tag == t_class and ns_elem.is_GObject or ns_elem.xml.tag == t_interface:
             c_type = ns_elem.c_type_name
             return Types('[>`%s] obj' % c_type, 'GObject_val(%s)', 'void *', ns_elem.ml_name0_for(ns), '%%s#as_%s' % c_type)
         else:
@@ -475,7 +488,7 @@ def c_to_ml_type(typ, ns):
     if ns_elem != None:
         if ns_elem.xml.tag == t_enumeration:
             return Types('int', 'Val_int(%s)', 'int', 'int', '%s')
-        elif ns_elem.xml.tag == t_class and ns_elem.is_GObject:
+        elif ns_elem.xml.tag == t_class and ns_elem.is_GObject or ns_elem.xml.tag == t_interface:
             ml_name0 = ns_elem.ml_name0_for(ns)
             return Types(ml_name0 + '_', 'Val_GObject((void *)(%s))', 'void *', ml_name0, 'new %s (%%s)' % ml_name0)
         else:
@@ -485,6 +498,12 @@ def c_to_ml_type(typ, ns):
 
 def output_gobject_types(ns, ml):
     for ns_elem_name, ns_elem in ns.elems.items():
+        if ns_elem.xml.tag == t_interface:
+            ml('type %s = [`%s|`GObject] obj' % (ns_elem.ml_name, ns_elem.c_type_name))
+            ns_elem.is_GObject = True # I assume that all interfaces implicitly inherit from GObject
+            ns_elem.parent_name = None
+            ns_elem.parent = None
+            continue
         if ns_elem.xml.tag != t_class:
             continue
         ancestors = []
@@ -492,6 +511,16 @@ def output_gobject_types(ns, ml):
         ns_elem.is_GObject = False
         while True:
             ancestors.append(ancestor)
+            ancestor.interfaces = []
+            for ancestor_elem in ancestor.xml:
+                if ancestor_elem.tag == t_implements:
+                    itf_name = ancestor_elem.attrib['name']
+                    itf = ancestor.ns.local_env.get(itf_name, None)
+                    if itf is None:
+                        print('Ignoring "implements" clause in class %s; unknown interface %s' % (ancestor.name, itf_name))
+                    else:
+                        ancestors.append(itf)
+                        ancestor.interfaces.append(itf)
             parent_name = ancestor.xml.attrib.get('parent', None)
             ancestor.parent_name = parent_name
             if ancestor.qualified_name == "GObject.Object": # or ancestor.qualified_name == "GObject.InitiallyUnowned":
@@ -664,8 +693,8 @@ def output_method_c_code(c_elem, c_func, params, result, cf):
         cf('  %s;' % call)
         ml_result = 'Val_unit'
     else:
-        cf('  %s result = %s;' % (result.c_type, call))
-        ml_result = result.as_ml_value % 'result'
+        cf('  %s result_ = %s;' % (result.c_type, call))
+        ml_result = result.as_ml_value % 'result_'
     if throws:
         cf('  if (err) { exn_msg = caml_copy_string(err->message); g_error_free(err); caml_failwith_value(exn_msg); }')
     cf('  CAMLreturn(%s);' % ml_result)
@@ -757,7 +786,7 @@ def process_namespace(namespace, env):
                 continue
             ml()
             ml('let _%s = %s' % (name, ml_value))
-        elif ns_elem.tag == t_class:
+        elif ns_elem.tag == t_class or ns_elem.tag == t_interface:
             nse = ns.local_env[ns_elem.attrib['name']]
             if not nse.is_GObject:
                 continue

@@ -12,10 +12,13 @@ let () =
     pack#append (label :> Gtk.widget);
     pack#append (button :> Gtk.widget);
     window#set_child (pack :> Gtk.widget);
+    let labelCssProvider = Gtk.css_provider () in
+    label#get_style_context#add_provider labelCssProvider#as_GtkStyleProvider Gtk._STYLE_PROVIDER_PRIORITY_APPLICATION;
     ignore @@ button#signal_connect_clicked (fun () -> begin
       let text = label#get_label in
       let i = int_of_string text in
       label#set_label @@ string_of_int (i + 1);
+      labelCssProvider#load_from_data (Printf.sprintf "label { font-size: %dpt; }" (12 + 2 * i));
       let t = match button#get_label with
       | Some s -> s ^ "+"
       | None -> "*"
