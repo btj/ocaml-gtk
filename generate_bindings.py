@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import platform
-from typing import Optional
+from typing import Optional, Any
 import xml.etree.ElementTree as ET
 
 c_functions_to_skip = {'g_io_module_load', 'g_io_module_unload'} # https://gitlab.gnome.org/GNOME/glib/-/issues/2498
@@ -97,6 +97,8 @@ class Types:
     c_type: str
     oo_type: str
     unwrap: str
+    # For every parameter whose value is derived from this parameter's value, the derived parameter's index and a format string that given C code for this parameter's value, produces C code for the derived parameter's value
+    derived_params: tuple[tuple[int, str], ...] = ()
 
 class Param:
     def __init__(self, ps_elem, types):
@@ -134,6 +136,11 @@ class CMethodParam:
 class Params:
     def __init__(self):
         self.params = []
+        self.nb_implicit_params = 0
+        self.derived_params = {}
+    
+    def non_derived_params(self):
+        return (p for i, p in enumerate(self.params) if i - self.nb_implicit_params not in self.derived_params)
 
     def append(self, param):
         self.params.append(param)
@@ -142,43 +149,43 @@ class Params:
         if self.params == []:
             return 'unit'
         else:
-            return ' -> '.join(p.types.ml_type for p in self.params)
+            return ' -> '.join(p.types.ml_type for p in self.non_derived_params())
 
     def signal_types(self):
         if self.params == []:
             return 'unit'
         else:
-            return ' -> '.join(p.types.oo_type for p in self.params)
+            return ' -> '.join(p.types.oo_type for p in self.non_derived_params())
 
     def ctor_params(self):
         if self.params == []:
             return '()'
         else:
-            return ' '.join(p.ml_typed_param for p in self.params)
+            return ' '.join(p.ml_typed_param for p in self.non_derived_params())
 
     def ctor_args(self):
         if self.params == []:
             return '()'
         else:
-            return ' '.join(p.ml_arg for p in self.params)
+            return ' '.join(p.ml_arg for p in self.non_derived_params())
 
     def method_params(self):
-        return ''.join(' ' + p.ml_typed_param for p in self.params)
+        return ''.join(' ' + p.ml_typed_param for p in self.non_derived_params())
 
     def method_args(self):
-        return ''.join(' ' + p.ml_arg for p in self.params)
+        return ''.join(' ' + p.ml_arg for p in self.non_derived_params())
 
     def callback_args(self):
         if self.params == []:
             return '()'
         else:
-            return ' '.join(p.ml_name for p in self.params)
+            return ' '.join(p.ml_name for p in self.non_derived_params())
 
     def callback_ret_args(self):
         if self.params == []:
             return '()'
         else:
-            return ' '.join('(%s)' % p.ml_arg for p in self.params)
+            return ' '.join('(%s)' % p.ml_arg for p in self.non_derived_params())
 
     def c_callback_args(self):
         if self.params == []:
@@ -187,17 +194,19 @@ class Params:
             return [p.c_value for p in self.params]
 
     def c_params(self):
-        return ''.join('%s %s, ' % (p.types.c_type, p.c_name) for p in self.params)
+        return ''.join('%s %s, ' % (p.types.c_type, p.c_name) for p in self.non_derived_params())
 
     def drop_first(self):
+        assert self.nb_implicit_params == 1
         p = Params()
         p.params = self.params[1:]
+        p.derived_params = self.derived_params
         return p
 
 @dataclass
 class ElementType:
     typename: str
-    array: bool
+    array: Optional[Any] # The XML 'array' element
     allow_none: bool
     transfer_ownership: Optional[str]
     direction: Optional[str]
@@ -214,11 +223,11 @@ class ElementType:
     @classmethod
     def make(cls, elem):
         typ = elem.find(t_type)
-        array = False
+        array = None
         if typ is None:
             array_elem = elem.find(t_array)
             assert array_elem is not None, f"Unknown type {elem}"
-            array = True
+            array = array_elem
             typ = array_elem.find(t_type)
             assert typ is not None, f"No type found for {elem}"
         allow_none = elem.get('allow-none', "0") == "1"
@@ -412,9 +421,14 @@ CAMLprim value ml_Gio_Application_run(value application, value argvValue) {
 '''
 
 def ml_to_c_type(typ, ns):
-    if typ.array:
-        # Not supported yet
-        return None
+    if typ.array is not None:
+        if 'length' not in typ.array.attrib:
+            return None
+        length_param_index = int(typ.array.attrib['length'])
+        if typ.typename == 'guint8':
+            return Types('string', '(const guchar *)String_val(%s)', 'const guchar *', 'string', '%s', ((length_param_index, 'caml_string_length(%s)'),))
+        else:
+            return None
     name = typ.typename
     if name == 'utf8':
         return Types('string', 'String_val(%s)', 'const char *', 'string', '%s')
@@ -424,6 +438,8 @@ def ml_to_c_type(typ, ns):
         return Types('int', 'Long_val(%s)', 'gint32', 'int', '%s')
     elif name == 'guint32':
         return Types('int', 'Long_val(%s)', 'guint32', 'int', '%s')
+    elif name == 'gint64':
+        return Types('int64', 'caml_copy_int64(%s)', 'gint64', 'int64', '%s')
     ns_elem = ns.local_env.get(name, None)
     if ns_elem is not None:
         if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
@@ -537,7 +553,13 @@ class BaseMethodParser:
                     if types == None:
                         self.print_skip('unsupported type %s of parameter %s' % (t.to_str, ps_name))
                         return False
+                    param_index = len(self.params.params)
                     self.params.append(Param(ps_elem, types))
+                    for derived_param in types.derived_params:
+                        derived_param_index, derived_param_value = derived_param
+                        if derived_param_index not in self.params.derived_params:
+                            self.params.derived_params[derived_param_index] = []
+                        self.params.derived_params[derived_param_index].append((param_index, derived_param_value))
             elif m_elem.tag == t_return_value:
                 t = ElementType.make(m_elem)
                 types = self.get_return_types(t)
@@ -564,6 +586,7 @@ class MethodParser(BaseMethodParser):
         super().__init__(elem, class_elem, ns)
         self.is_constructor = elem.tag == t_constructor
         if not self.is_constructor:
+            self.params.nb_implicit_params = 1
             self.params.append(CMethodParam(c_type_name))
 
     def get_param_types(self, t):
@@ -613,19 +636,28 @@ def output_method_code(c_elem, nse, params, result, ml, cf):
 
 def output_method_c_code(c_elem, c_func, params, result, cf):
     cf()
-    cf('CAMLprim value %s(%s) {' % (c_func, ', '.join('value %s' % p.c_name for p in params.params)))
-    params1 = params.params[:5]
-    params2 = params.params[5:]
+    non_derived_params = list(params.non_derived_params())
+    cf('CAMLprim value %s(%s) {' % (c_func, ', '.join('value %s' % p.c_name for p in non_derived_params)))
+    params1 = non_derived_params[:5]
+    params2 = non_derived_params[5:]
     cf('  CAMLparam%d(%s);' % (len(params1), ', '.join(p.c_name for p in params1)))
     while params2 != []:
         params2_1 = params2[:5]
         params2 = params2[5:]
         cf('  CAMLxparam%d(%s);' % (len(params2_1), ', '.join(p.c_name for p in params2_1)))
+    for derived_param_index, derived_param_sources in params.derived_params.items():
+        param = params.params[params.nb_implicit_params + derived_param_index]
+        primary_source_index, primary_source_value = derived_param_sources[0]
+        primary_source_param = params.params[primary_source_index]
+        cf('  %s = %s;' % (param.c_typed_param, primary_source_value % primary_source_param.c_name))
+        for secondary_source_index, secondary_source_value in derived_param_sources[1:]:
+            secondary_source_param = params.params[secondary_source_index]
+            cf('  if (%s != %s) caml_failwith("Array lengths do not match");' % (param.c_name, secondary_source_value % secondary_source_param.c_name))
     throws = c_elem.attrib.get('throws', None) == '1'
     if throws:
         cf('  CAMLlocal1(exn_msg);');
         cf('  GError *err = NULL;')
-    args = ', '.join([p.c_value for p in params.params] + (['&err'] if throws else []))
+    args = ', '.join([p.c_value if i - params.nb_implicit_params not in params.derived_params else p.c_name for i, p in enumerate(params.params)] + (['&err'] if throws else []))
     call = '%s(%s)' % (c_elem.attrib[a_identifier], args)
     if result.ml_type == 'unit':
         cf('  %s;' % call)
