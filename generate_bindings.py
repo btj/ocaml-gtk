@@ -8,6 +8,7 @@ c_functions_to_skip = {'g_io_module_load', 'g_io_module_unload'} # https://gitla
 t_include = "{http://www.gtk.org/introspection/core/1.0}include"
 t_namespace = "{http://www.gtk.org/introspection/core/1.0}namespace"
 t_class = "{http://www.gtk.org/introspection/core/1.0}class"
+t_constant = "{http://www.gtk.org/introspection/core/1.0}constant"
 t_attribute = "{http://www.gtk.org/introspection/core/1.0}attribute"
 t_constructor = "{http://www.gtk.org/introspection/core/1.0}constructor"
 t_method = "{http://www.gtk.org/introspection/core/1.0}method"
@@ -734,6 +735,28 @@ def process_namespace(namespace, env):
                 if bf_elem.tag == t_member:
                     ml('  let %s = %s' % (escape_ml_keyword(bf_elem.attrib['name']), bf_elem.attrib['value']))
             ml('end')
+        elif ns_elem.tag == t_constant:
+            constant_xml = ns_elem
+            name = constant_xml.attrib['name']
+            value = constant_xml.attrib['value']
+            type_name = constant_xml.find(t_type).attrib['name']
+            if type_name in {'gint8', 'guint8', 'gint16', 'guint16', 'gint32', 'guint32', 'gint64', 'guint64', 'gdouble'}:
+                ml_value = value
+            elif type_name == 'gboolean':
+                if value == '0':
+                    ml_value = 'false'
+                elif value == '1':
+                    ml_value = 'true'
+                else:
+                    print('Skipping constant %s: unknown gboolean literal %s' % (name, value))
+                    continue
+            elif type_name == 'utf8':
+                ml_value = '"%s"' % ''.join('\\x%02x' % ord(c) if c < ' ' else c for c in value)
+            else:
+                print('Skipping constant %s: type "%s" is not yet supported' % (name, type_name))
+                continue
+            ml()
+            ml('let _%s = %s' % (name, ml_value))
         elif ns_elem.tag == t_class:
             nse = ns.local_env[ns_elem.attrib['name']]
             if not nse.is_GObject:
