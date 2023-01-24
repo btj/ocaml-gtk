@@ -227,6 +227,7 @@ class ElementType:
     allow_none: bool
     transfer_ownership: Optional[str]
     direction: Optional[str]
+    caller_allocates: Optional[str]
 
     @property
     def to_str(self):
@@ -250,8 +251,9 @@ class ElementType:
         allow_none = elem.get('allow-none', "0") == "1"
         transfer_ownership = elem.get('transfer-ownership', None)
         direction = elem.get('direction', None)
+        caller_allocates = elem.get('caller-allocates', None)
         typename = typ.attrib['name']
-        return cls(typename, array, allow_none, transfer_ownership, direction)
+        return cls(typename, array, allow_none, transfer_ownership, direction, caller_allocates)
 
 @dataclass
 class Method:
@@ -681,8 +683,8 @@ class MethodParser(BaseMethodParser):
         if t.transfer_ownership != 'none':
             self.print_skip('missing transfer-ownership="none" attribute for parameter %s' % ps_name)
             return False
-        if t.direction is not None:
-            self.print_skip('explicit "direction" attribute for parameter %s not yet supported' % ps_name)
+        if not (t.direction is None and t.caller_allocates is None or t.direction == 'out' and t.caller_allocates == '1'):
+            self.print_skip('Parameter %s: unexpected value for "direction" or "caller_allocates"' % ps_name)
             return False
         return True
 
