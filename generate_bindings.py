@@ -496,50 +496,51 @@ def c_to_ml_type(typ, ns):
     else:
         return None
 
+def compute_ancestors(ns_elem):
+    if hasattr(ns_elem, 'ancestors'):
+        return
+    if ns_elem.xml.tag == t_class or ns_elem.xml.tag == t_interface:
+        ancestors = []
+        ns_elem.is_GObject = False
+        ancestors.append(ns_elem)
+        ns_elem.interfaces = []
+        for ns_elem_elem in ns_elem.xml:
+            if ns_elem_elem.tag == t_implements:
+                itf_name = ns_elem_elem.attrib['name']
+                itf = ns_elem.ns.local_env.get(itf_name, None)
+                if itf is None:
+                    print('Ignoring "implements" clause in class %s; unknown interface %s' % (ns_elem.name, itf_name))
+                else:
+                    ancestors.append(itf)
+                    ns_elem.interfaces.append(itf)
+        parent_name = ("Object" if ns_elem.ns.name == "GObject" else "GObject.Object") if ns_elem.xml.tag == t_interface else ns_elem.xml.attrib.get('parent', None)
+        ns_elem.parent_name = parent_name
+        if ns_elem.qualified_name == "GObject.Object": # or ns_elem.qualified_name == "GObject.InitiallyUnowned":
+            ns_elem.parent = None
+            ns_elem.is_GObject = True
+        elif parent_name is None:
+            ns_elem.parent = None
+            print('Warning: while determining ancestry of class %s: class %s has no parent' % (ns_elem.name, ns_elem.qualified_name))
+        else:
+            parent = ns_elem.ns.local_env.get(parent_name, None)
+            ns_elem.parent = parent
+            if parent is None:
+                print('Warning: incomplete ancestry of class %s due to unknown ancestor %s' % (ns_elem.name, parent_name))
+            else:
+                compute_ancestors(parent)
+                ancestors.extend(parent.ancestors)
+                ns_elem.is_GObject = parent.is_GObject
+        ns_elem.ancestors = ancestors
+    else:
+        ns_elem.is_GObject = False
+        ns_elem.ancestors = []
+
 def output_gobject_types(ns, ml):
     for ns_elem_name, ns_elem in ns.elems.items():
-        if ns_elem.xml.tag == t_interface:
-            ml('type %s = [`%s|`GObject] obj' % (ns_elem.ml_name, ns_elem.c_type_name))
-            ns_elem.is_GObject = True # I assume that all interfaces implicitly inherit from GObject
-            ns_elem.parent_name = None
-            ns_elem.parent = None
-            continue
-        if ns_elem.xml.tag != t_class:
-            continue
-        ancestors = []
-        ancestor = ns_elem
-        ns_elem.is_GObject = False
-        while True:
-            ancestors.append(ancestor)
-            ancestor.interfaces = []
-            for ancestor_elem in ancestor.xml:
-                if ancestor_elem.tag == t_implements:
-                    itf_name = ancestor_elem.attrib['name']
-                    itf = ancestor.ns.local_env.get(itf_name, None)
-                    if itf is None:
-                        print('Ignoring "implements" clause in class %s; unknown interface %s' % (ancestor.name, itf_name))
-                    else:
-                        ancestors.append(itf)
-                        ancestor.interfaces.append(itf)
-            parent_name = ancestor.xml.attrib.get('parent', None)
-            ancestor.parent_name = parent_name
-            if ancestor.qualified_name == "GObject.Object": # or ancestor.qualified_name == "GObject.InitiallyUnowned":
-                ancestor.parent = None
-                ns_elem.is_GObject = True
-                break
-            if parent_name is None:
-                ancestor.parent = None
-                print('Warning: while determining ancestry of class %s: class %s has no parent' % (ns_elem_name, ancestor.qualified_name))
-                break
-            ancestor0 = ancestor
-            ancestor = ancestor.ns.local_env.get(parent_name, None)
-            ancestor0.parent = ancestor
-            if ancestor is None:
-                print('Warning: incomplete ancestry of class %s due to unknown ancestor %s' % (ns_elem_name, parent_name))
-                break
+        compute_ancestors(ns_elem)
         if ns_elem.is_GObject:
             ml('type %s = [%s] obj' % (ns_elem.ml_name,
-                '|'.join('`' + a.c_type_name for a in ancestors)))
+                '|'.join('`' + a.c_type_name for a in ns_elem.ancestors)))
 
 class BaseMethodParser:
     """Parse method params and return value from xml definition."""
