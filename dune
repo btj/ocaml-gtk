@@ -1,3 +1,7 @@
+(env
+  (dev
+    (flags (:standard -w -33))))
+
 (rule
  (targets GLib-2.0.xml)
  (action (run g-ir-generate -o GLib-2.0.xml %{env:PREFIX=/usr/local}/girepository-1.0/GLib-2.0.typelib))
@@ -38,7 +42,7 @@
  (name ocamlgtk)
  (wrapped false)
  ; (deps (filename Gtk.ml) (filename GObject.ml) (filename gobject0.ml) (filename Gio.ml Gdk)
- (modules Gtk GObject gobject0 Gio Gdk)
+ (modules Gtk GObject gobject0 Gio Gdk GLib)
  (flags :standard -no-strict-sequence -w -7)
  (c_library_flags (:include gtk4-libs.sexp))
  (foreign_stubs
