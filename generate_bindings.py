@@ -499,6 +499,7 @@ def c_to_ml_type(typ, ns):
 def compute_ancestors(ns_elem):
     if hasattr(ns_elem, 'ancestors'):
         return
+    parent_ml_method_names = set()
     if ns_elem.xml.tag == t_class or ns_elem.xml.tag == t_interface:
         ancestors = []
         ns_elem.is_GObject = False
@@ -530,10 +531,33 @@ def compute_ancestors(ns_elem):
                 compute_ancestors(parent)
                 ancestors.extend(parent.ancestors)
                 ns_elem.is_GObject = parent.is_GObject
+                parent_ml_method_names = parent.ml_method_names
         ns_elem.ancestors = ancestors
     else:
         ns_elem.is_GObject = False
         ns_elem.ancestors = []
+    ml_method_names = set(parent_ml_method_names)
+    xml_method_names = {}
+    for ns_elem_child in ns_elem.xml:
+        if ns_elem_child.tag == t_method:
+            xml_name = ns_elem_child.attrib['name']
+            ml_name0 = escape_ml_keyword(xml_name)
+            if ns_elem.qualified_name == 'Gtk.Widget' and xml_name == 'get_settings':
+                # To work around a weird OCaml compiler error message
+                ml_name0 += '_'
+            if ml_name0 not in parent_ml_method_names:
+                ml_name = ml_name0
+            else:
+                index = 0
+                while True:
+                    ml_name = '%s%d' % (ml_name0, index)
+                    if ml_name not in parent_ml_method_names:
+                        break
+                    index += 1
+            ml_method_names.add(ml_name)
+            xml_method_names[xml_name] = ml_name
+    ns_elem.ml_method_names = ml_method_names
+    ns_elem.xml_method_names = xml_method_names
 
 def output_gobject_types(ns, ml):
     for ns_elem_name, ns_elem in ns.elems.items():
@@ -814,11 +838,7 @@ def process_namespace(namespace, env):
                     if params:
                         ml_func = escape_ml_keyword(c_elem_name)
                         mparams = params.drop_first()
-                        if nse.qualified_name == 'Gtk.Widget' and ml_func == 'get_settings':
-                            # To work around a weird OCaml compiler error message
-                            method_name = ml_func + '_'
-                        else:
-                            method_name = ml_func
+                        method_name = nse.xml_method_names[c_elem_name]
                         cls.methods.append(Method(method_name, mparams, result, ml_func, nse.name))
                         output_method_code(c_elem, nse, params, result, ml, cf)
                     elif nse.qualified_name == 'Gio.Application' and c_elem_name == 'run':
