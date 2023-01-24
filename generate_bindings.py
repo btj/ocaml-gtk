@@ -7,6 +7,7 @@ c_functions_to_skip = {'g_io_module_load', 'g_io_module_unload'} # https://gitla
 
 t_include = "{http://www.gtk.org/introspection/core/1.0}include"
 t_namespace = "{http://www.gtk.org/introspection/core/1.0}namespace"
+t_record = "{http://www.gtk.org/introspection/core/1.0}record"
 t_class = "{http://www.gtk.org/introspection/core/1.0}class"
 t_constant = "{http://www.gtk.org/introspection/core/1.0}constant"
 t_interface = "{http://www.gtk.org/introspection/core/1.0}interface"
@@ -38,11 +39,13 @@ ml_keywords = {
         'new', 'nonrec', 'object', 'of', 'open', 'or',
         'private', 'rec', 'sig', 'struct', 'then', 'to',
         'true', 'try', 'type', 'val', 'virtual', 'when',
-        'while', 'with'
+        'while', 'with',
+        # Not keywords but should also be escaped
+        'string'
 }
 
 def escape_ml_keyword(name):
-    return '_' + name if name in ml_keywords else name
+    return '_' + name if name in ml_keywords or '0' <= name[0] and name[0] <= '9' else name
 
 c_keywords = {
         'value'
@@ -122,6 +125,16 @@ class Param:
     @property
     def c_typed_param(self):
         return '%s %s' % (self.types.c_type, self.c_name)
+
+    @property
+    def c_value(self):
+        return self.types.as_ml_value % self.c_name
+
+class RecordReceiverParam:
+    def __init__(self, record):
+        self.c_name = 'instance_'
+        self.types = Types('%s' % record.ml_name, '(%s *)Data_abstract_val(%%s)' % record.c_type_name, '%s *' % record.c_type_name, None, None)
+        self.ml_name = None
 
     @property
     def c_value(self):
@@ -461,6 +474,9 @@ def ml_to_c_type(typ, ns):
         elif ns_elem.xml.tag == t_class and ns_elem.is_GObject or ns_elem.xml.tag == t_interface:
             c_type = ns_elem.c_type_name
             return Types('[>`%s] obj' % c_type, 'GObject_val(%s)', 'void *', ns_elem.ml_name0_for(ns), '%%s#as_%s' % c_type)
+        elif ns_elem.xml.tag == t_record and a_type_name in ns_elem.xml.attrib:
+            c_type = ns_elem.c_type_name
+            return Types('%s_' % ns_elem.ml_name0_for(ns), '(%s *)Data_abstract_val(%%s)' % c_type, '%s *' % c_type, ns_elem.ml_name0_for(ns), '%%s#as_%s' % c_type)
         else:
             return None
     else:
@@ -536,6 +552,8 @@ def compute_ancestors(ns_elem):
     else:
         ns_elem.is_GObject = False
         ns_elem.ancestors = []
+        ns_elem.parent_name = None
+        ns_elem.parent = None
     ml_method_names = set(parent_ml_method_names)
     xml_method_names = {}
     for ns_elem_child in ns_elem.xml:
@@ -565,13 +583,16 @@ def output_gobject_types(ns, ml):
         if ns_elem.is_GObject:
             ml('type %s = [%s] obj' % (ns_elem.ml_name,
                 '|'.join('`' + a.c_type_name for a in ns_elem.ancestors)))
+        elif ns_elem.xml.tag == t_record:
+            ml('type %s' % ns_elem.ml_name)
 
 class BaseMethodParser:
     """Parse method params and return value from xml definition."""
 
     def __init__(self, elem, class_elem, ns):
         self.elem = elem
-        self.class_name = class_elem.attrib['name']
+        self.is_record_method = class_elem.xml.tag == t_record
+        self.class_name = class_elem.name
         self.ns = ns
         self.params = Params()
         self.result = None
@@ -642,7 +663,10 @@ class MethodParser(BaseMethodParser):
         self.is_constructor = elem.tag == t_constructor
         if not self.is_constructor:
             self.params.nb_implicit_params = 1
-            self.params.append(CMethodParam(c_type_name))
+            if self.is_record_method:
+                self.params.append(RecordReceiverParam(class_elem))
+            else:
+                self.params.append(CMethodParam(c_type_name))
 
     def get_param_types(self, t):
         return self.ml_to_c_type(t)
@@ -794,7 +818,7 @@ def process_namespace(namespace, env):
             name = constant_xml.attrib['name']
             value = constant_xml.attrib['value']
             type_name = constant_xml.find(t_type).attrib['name']
-            if type_name in {'gint8', 'guint8', 'gint16', 'guint16', 'gint32', 'guint32', 'gint64', 'guint64', 'gdouble'}:
+            if type_name in {'gint8', 'guint8', 'gint16', 'guint16', 'gint32', 'guint32', 'gdouble'}:
                 ml_value = value
             elif type_name == 'gboolean':
                 if value == '0':
@@ -811,21 +835,22 @@ def process_namespace(namespace, env):
                 continue
             ml()
             ml('let _%s = %s' % (name, ml_value))
-        elif ns_elem.tag == t_class or ns_elem.tag == t_interface:
+        elif ns_elem.tag == t_class or ns_elem.tag == t_interface or ns_elem.tag == t_record and a_type_name in ns_elem.attrib:
             nse = ns.local_env[ns_elem.attrib['name']]
-            if not nse.is_GObject:
+            if not nse.is_GObject and ns_elem.tag != t_record:
                 continue
             cls = Class(nse)
             classes[cls.name] = cls
             ml()
             ml('module %s_ = struct' % nse.name)
-            ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (cls.c_type_name, cls.self_type))
+            if ns_elem.tag != t_record:
+                ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (cls.c_type_name, cls.self_type))
             for c_elem in ns_elem:
                 c_elem_name = c_elem.attrib['name']
                 if c_elem.tag == t_attribute:
                     pass
                 elif c_elem.tag == t_constructor:
-                    parser = MethodParser(c_elem, cls.c_type_name, ns_elem, ns)
+                    parser = MethodParser(c_elem, cls.c_type_name, nse, ns)
                     params, result = parser.parse()
                     if params:
                         constructor = Constructor(c_elem_name, cls, nse, params, result)
@@ -833,7 +858,7 @@ def process_namespace(namespace, env):
                         result = constructor.result
                         output_method_code(c_elem, nse, params, result, ml, cf)
                 elif c_elem.tag == t_method:
-                    parser = MethodParser(c_elem, cls.c_type_name, ns_elem, ns)
+                    parser = MethodParser(c_elem, cls.c_type_name, nse, ns)
                     params, result = parser.parse()
                     if params:
                         ml_func = escape_ml_keyword(c_elem_name)
@@ -846,7 +871,7 @@ def process_namespace(namespace, env):
                         cls.methods.append(GioApplicationRunMethod())
                         cf(_GIO_APPLICATION_RUN)
                 elif c_elem.tag == t_signal:
-                    parser = SignalParser(c_elem, ns_elem, ns)
+                    parser = SignalParser(c_elem, nse, ns)
                     params, result = parser.parse()
                     if params:
                         c_name = c_elem_name.replace('-', '_')
