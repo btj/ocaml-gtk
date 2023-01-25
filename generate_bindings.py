@@ -114,11 +114,16 @@ class Types:
     derived_params: tuple[tuple[int, str], ...] = ()
 
 class Param:
-    def __init__(self, ps_elem, types):
+    def __init__(self, ps_elem, types, out_param_record_name):
         name = ps_elem.attrib['name']
         self.c_name = escape_c_keyword(name)
         self.ml_name = escape_ml_keyword(name)
         self.types = types
+        self.out_param_record_name = out_param_record_name
+    
+    @property
+    def is_out_param(self):
+        return self.out_param_record_name is not None
 
     @property
     def ml_typed_param(self):
@@ -162,8 +167,8 @@ class Params:
         self.nb_implicit_params = 0
         self.derived_params = {}
     
-    def non_derived_params(self):
-        return (p for i, p in enumerate(self.params) if i - self.nb_implicit_params not in self.derived_params)
+    def non_derived_params(self, include_out_params=True):
+        return (p for i, p in enumerate(self.params) if i - self.nb_implicit_params not in self.derived_params and (include_out_params or not p.is_out_param))
 
     def append(self, param):
         self.params.append(param)
@@ -192,8 +197,8 @@ class Params:
         else:
             return ' '.join(p.ml_arg for p in self.non_derived_params())
 
-    def method_params(self):
-        return ''.join(' ' + p.ml_typed_param for p in self.non_derived_params())
+    def method_params(self, include_out_params=True):
+        return ''.join(' ' + p.ml_typed_param for p in self.non_derived_params(include_out_params))
 
     def method_args(self):
         return ''.join(' ' + p.ml_arg for p in self.non_derived_params())
@@ -270,10 +275,18 @@ class Method:
     module_name: str
 
     def to_ml(self):
-        params_text = self.params.method_params()
+        out_params = [p for p in self.params.params if p.is_out_param]
+        params_text = self.params.method_params(include_out_params=False)
         args_text = self.params.method_args()
-        body = self.result.unwrap % (
+        call = self.result.unwrap % (
             '%s_.%s self%s' % (self.module_name, self.ml_func, args_text))
+        out_arg_decls = ''.join('let %s = new %s (%s_.alloc_uninit_UNSAFE ()) in ' % (p.ml_name, p.types.oo_type, p.out_param_record_name) for p in out_params)
+        if out_params == []:
+            body = call
+        elif self.result.ml_type == 'unit':
+            body = '%s%s; (%s)' % (out_arg_decls, call, ', '.join(p.ml_name for p in out_params))
+        else:
+            body = '%s(%s, %s)' % (out_arg_decls, call, ', '.join(p.ml_name for p in out_params))
         return 'method %s%s = %s' % (self.name, params_text, body)
 
 class GioApplicationRunMethod:
@@ -646,7 +659,12 @@ class BaseMethodParser:
                         self.print_skip('unsupported type %s of parameter %s' % (t.to_str, ps_name))
                         return False
                     param_index = len(self.params.params)
-                    self.params.append(Param(ps_elem, types))
+                    out_param_record_name = None
+                    if t.direction == 'out':
+                        type_nse = self.ns.local_env.get(t.typename, None)
+                        if type_nse is not None and type_nse.xml.tag == t_record and type_nse.has_fields and not type_nse.has_ctors:
+                            out_param_record_name = t.typename
+                    self.params.append(Param(ps_elem, types, out_param_record_name))
                     for derived_param in types.derived_params:
                         derived_param_index, derived_param_value = derived_param
                         if derived_param_index not in self.params.derived_params:

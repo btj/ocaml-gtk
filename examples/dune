@@ -18,3 +18,8 @@
  (modules textiter_raw)
  (libraries ocamlgtk)
 )
+
+(executable (name textiter)
+ (modules textiter)
+ (libraries ocamlgtk)
+)
