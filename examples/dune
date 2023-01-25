@@ -13,3 +13,8 @@
  (modules get_set)
  (libraries ocamlgtk)
 )
+
+(executable (name textiter_raw)
+ (modules textiter_raw)
+ (libraries ocamlgtk)
+)
