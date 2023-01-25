@@ -3,7 +3,12 @@ import platform
 from typing import Optional, Any
 import xml.etree.ElementTree as ET
 
-c_functions_to_skip = {'g_io_module_load', 'g_io_module_unload'} # https://gitlab.gnome.org/GNOME/glib/-/issues/2498
+c_functions_to_skip = {
+    'g_io_module_load', 'g_io_module_unload', # https://gitlab.gnome.org/GNOME/glib/-/issues/2498
+    'g_value_take_string', # https://gitlab.gnome.org/GNOME/glib/-/issues/2894
+    'g_io_channel_get_line_term', # https://gitlab.gnome.org/GNOME/glib/-/issues/2895
+    'g_time_zone_adjust_time', # 'https://gitlab.gnome.org/GNOME/glib/-/issues/2897'
+}
 
 t_include = "{http://www.gtk.org/introspection/core/1.0}include"
 t_namespace = "{http://www.gtk.org/introspection/core/1.0}namespace"
@@ -468,7 +473,7 @@ def ml_to_c_type(typ, ns):
     elif name == 'guint32':
         return Types('int', 'Long_val(%s)', 'guint32', 'int', '%s')
     elif name == 'gint64':
-        return Types('int64', 'caml_copy_int64(%s)', 'gint64', 'int64', '%s')
+        return Types('int64', 'Int64_val(%s)', 'gint64', 'int64', '%s')
     ns_elem = ns.local_env.get(name, None)
     if ns_elem is not None:
         if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
@@ -848,6 +853,8 @@ def process_namespace(namespace, env):
             if ns_elem.tag != t_record:
                 ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (cls.c_type_name, cls.self_type))
             for c_elem in ns_elem:
+                if c_elem.get('deprecated', None) == '1':
+                    continue
                 c_elem_name = c_elem.attrib['name']
                 if c_elem.tag == t_attribute:
                     pass
