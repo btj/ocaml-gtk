@@ -19,6 +19,7 @@ t_interface = "{http://www.gtk.org/introspection/core/1.0}interface"
 t_implements = "{http://www.gtk.org/introspection/core/1.0}implements"
 t_attribute = "{http://www.gtk.org/introspection/core/1.0}attribute"
 t_constructor = "{http://www.gtk.org/introspection/core/1.0}constructor"
+t_field = "{http://www.gtk.org/introspection/core/1.0}field"
 t_method = "{http://www.gtk.org/introspection/core/1.0}method"
 t_parameters = "{http://www.gtk.org/introspection/core/1.0}parameters"
 t_parameter = "{http://www.gtk.org/introspection/core/1.0}parameter"
@@ -563,8 +564,14 @@ def compute_ancestors(ns_elem):
         ns_elem.parent = None
     ml_method_names = set(parent_ml_method_names)
     xml_method_names = {}
+    has_ctors = False
+    has_fields = False
     for ns_elem_child in ns_elem.xml:
-        if ns_elem_child.tag == t_method:
+        if ns_elem_child.tag == t_field:
+            has_fields = True
+        elif ns_elem_child.tag == t_constructor:
+            has_ctors = True
+        elif ns_elem_child.tag == t_method:
             xml_name = ns_elem_child.attrib['name']
             ml_name0 = escape_ml_keyword(xml_name)
             if ns_elem.qualified_name == 'Gtk.Widget' and xml_name == 'get_settings':
@@ -583,6 +590,8 @@ def compute_ancestors(ns_elem):
             xml_method_names[xml_name] = ml_name
     ns_elem.ml_method_names = ml_method_names
     ns_elem.xml_method_names = xml_method_names
+    ns_elem.has_fields = has_fields
+    ns_elem.has_ctors = has_ctors
 
 def output_gobject_types(ns, ml):
     for ns_elem_name, ns_elem in ns.elems.items():
@@ -852,6 +861,16 @@ def process_namespace(namespace, env):
             ml('module %s_ = struct' % nse.name)
             if ns_elem.tag != t_record:
                 ml('  let upcast: [>`%s] obj -> %s = Obj.magic' % (cls.c_type_name, cls.self_type))
+            elif nse.has_fields and not nse.has_ctors:
+                c_func_name = 'ml_%s_%s_alloc_uninit_UNSAFE' % (nse.ns.name, nse.name)
+                ml('  external alloc_uninit_UNSAFE: unit -> %s = "%s"' % (nse.ml_name, c_func_name))
+                cf()
+                cf('CAMLprim value %s() {' % c_func_name)
+                cf('  if ((sizeof(%s)-1)/sizeof(value)+1 <= Max_young_wosize)' % nse.c_type_name)
+                cf('    return caml_alloc_small((sizeof(%s)-1)/sizeof(value)+1, Abstract_tag);' % nse.c_type_name)
+                cf('  else')
+                cf('    return caml_alloc_shr((sizeof(%s)-1)/sizeof(value)+1, Abstract_tag);' % nse.c_type_name)
+                cf('}')
             for c_elem in ns_elem:
                 if c_elem.get('deprecated', None) == '1':
                     continue
