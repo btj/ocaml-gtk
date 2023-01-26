@@ -929,6 +929,8 @@ def process_namespace(namespace, env):
                     property_name = c_elem.get('name')
                     ml_name = property_name.replace('-', '_')
                     setter_name = 'set_' + ml_name
+                    if setter_name in nse.ml_method_names:
+                        continue
                     type = c_elem.find(t_type)
                     if type is None:
                         print('Skipping property %s of class %s: no "type" element' % (property_name, nse.name))
@@ -937,13 +939,23 @@ def process_namespace(namespace, env):
                     setter_c_name = 'ml_%s_%s_%s' % (ns.name, nse.name, setter_name)
                     if type_name == 'utf8':
                         ml_type = 'string'
+                        c_value = 'String_val(%s)'
+                    elif type_name == 'gboolean':
+                        ml_type = 'bool'
+                        c_value = 'Bool_val(%s)'
+                    elif type_name == 'gint32':
+                        ml_type = 'int'
+                        c_value = 'Int_val(%s)'
+                    elif type_name == 'gfloat' or type_name == 'gdouble':
+                        ml_type = 'float'
+                        c_value = 'Double_val(%s)'
                     else:
                         continue
                     ml('  external %s: [>`%s] obj -> %s -> unit = "%s"' % (setter_name, nse.c_type_name, ml_type, setter_c_name))
                     cf()
                     cf('CAMLprim value %s(value instance_, value value_) {' % setter_c_name)
                     cf('  CAMLparam2(instance_, value_);')
-                    cf('  g_object_set(GObject_val(instance_), "%s", String_val(value_), NULL);' % property_name)
+                    cf('  g_object_set(GObject_val(instance_), "%s", %s, NULL);' % (property_name, c_value % 'value_'))
                     cf('  CAMLreturn(Val_unit);')
                     cf('}')
                     cls.properties_lines.append('    method %s value_ = %s_.%s self value_' % (setter_name, nse.name, setter_name))

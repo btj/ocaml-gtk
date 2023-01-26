@@ -16,6 +16,10 @@ let () =
 
     let tag = Gtk.text_tag "red" in
     tag#set_foreground "red";
+    tag#set_editable false;
+    tag#set_weight 900; (* https://docs.gtk.org/Pango/enum.Weight.html *)
+    tag#set_line_height 3.0;
+    tag#set_scale 1.5;
     ignore @@ textBuffer#get_tag_table#add tag;
     textBuffer#apply_tag tag iter textBuffer#get_end_iter;
 
