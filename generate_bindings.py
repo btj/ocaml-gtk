@@ -10,6 +10,59 @@ c_functions_to_skip = {
     'g_time_zone_adjust_time', # 'https://gitlab.gnome.org/GNOME/glib/-/issues/2897'
 }
 
+# Cases where the length of a parameter of type utf8 is given by a parameter of signed integer type.
+# In all of these cases, the length parameter can be -1 to indicate that the string is NUL-terminated.
+string_length_parameters = {
+    ('gtk_im_context_set_surrounding_with_selection', 'text'): 1,
+    ('gtk_text_buffer_insert', 'text'): 2,
+    ('gtk_text_buffer_insert_at_cursor', 'text'): 1,
+    ('gtk_text_buffer_insert_interactive', 'text'): 2,
+    ('gtk_text_buffer_insert_interactive_at_cursor', 'text'): 1,
+    ('gtk_text_buffer_insert_markup', 'markup'): 2,
+    ('gtk_text_buffer_set_text', 'text'): 1,
+    ('gtk_editable_insert_text', 'text'): 1,
+    ('gtk_builder_new_from_string', 'string'): 1,
+    ('gtk_builder_add_from_string', 'buffer'): 1,
+    ('gtk_builder_add_objects_from_string', 'buffer'): 1,
+    ('gtk_builder_extend_with_template', 'buffer'): 3,
+    ('g_io_channel_set_line_term', 'line_term'): 1, # Supports strings with embedded NULs
+    ('g_key_file_load_from_data', 'data'): 1,
+    ('g_regex_escape_nul', 'string'): 1, # Supports strings with embedded NULs
+    # ('g_regex_escape_string', 'string'): 1, # Supports strings with embedded NULs # Currently buggy GIR: https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3236
+    ('g_uri_parse_params', 'params'): 1,
+    ('g_uri_unescape_bytes', 'escaped_string'): 1,
+    ('g_uri_params_iter_init', 'params'): 1,
+    ('g_compute_checksum_for_string', 'str'): 2,
+    ('g_compute_hmac_for_string', 'str'): 5,
+    ('g_markup_escape_text', 'text'): 1,
+    ('g_string_new_len', 'init'): 1,
+    ('g_string_append_len', 'val'): 1, # Supports strings with embedded NULs
+    ('g_string_insert_len', 'val'): 2, # Supports strings with embedded NULs
+    ('g_string_overwrite_len', 'val'): 2, # Supports strings with embedded NULs
+    ('g_string_prepend_len', 'val'): 1, # Supports strings with embedded NULs
+    ('g_string_insert_len', 'string'): 1, # Supports strings with embedded NULs
+    ('g_ascii_strdown', 'str'): 1,
+    ('g_ascii_strup', 'str'): 1,
+    ('g_filename_from_utf8', 'utf8string'): 1,
+    ('g_filename_to_utf8', 'opsysstring'): 1, # Note: here, the string parameter is of type 'filename', not 'utf8'
+    ('g_locale_from_utf8', 'utf8string'): 1,
+    ('g_ref_string_new_len', 'str'): 1,
+    ('g_utf8_casefold', 'str'): 1,
+    ('g_utf8_collate_key', 'str'): 1,
+    ('g_utf8_collate_key_for_filename', 'str'): 1,
+    ('g_utf8_make_valid', 'str'): 1,
+    ('g_utf8_normalize', 'str'): 1,
+    ('g_utf8_strchr', 'p'): 1,
+    ('g_utf8_strdown', 'str'): 1,
+    ('g_utf8_strrchr', 'p'): 1,
+    ('g_utf8_strreverse', 'str'): 1,
+    ('g_utf8_strup', 'str'): 1,
+    ('g_utf8_to_ucs4', 'str'): 1,
+    ('g_utf8_to_ucs4_fast', 'str'): 1,
+    ('g_utf8_to_utf16', 'str'): 1,
+    ('g_tls_certificate_new_from_pem', 'data'): 1,
+}
+
 t_include = "{http://www.gtk.org/introspection/core/1.0}include"
 t_namespace = "{http://www.gtk.org/introspection/core/1.0}namespace"
 t_record = "{http://www.gtk.org/introspection/core/1.0}record"
@@ -239,6 +292,7 @@ class ElementType:
     transfer_ownership: Optional[str]
     direction: Optional[str]
     caller_allocates: Optional[str]
+    string_length_param_index: Optional[int] = None
 
     @property
     def to_str(self):
@@ -481,7 +535,7 @@ def ml_to_c_type(typ, ns):
             return None
     name = typ.typename
     if name == 'utf8':
-        return Types('string', 'String_val(%s)', 'const char *', 'string', '%s')
+        return Types('string', 'String_val(%s)', 'const char *', 'string', '%s', ((typ.string_length_param_index, 'caml_string_length(%s)'),) if typ.string_length_param_index is not None else ())
     elif name == 'gboolean':
         return Types('bool', 'Bool_val(%s)', 'gboolean', 'bool', '%s')
     elif name == 'gint32':
@@ -654,6 +708,7 @@ class BaseMethodParser:
                     assert ps_elem.tag == t_parameter
                     ps_name = ps_elem.attrib['name']
                     t = ElementType.make(ps_elem)
+                    t.string_length_param_index = string_length_parameters.get((self.elem.attrib.get(a_identifier, None), ps_name), None)
                     if not self.validate_param(t, ps_name):
                         return False
                     types = self.get_param_types(t)
