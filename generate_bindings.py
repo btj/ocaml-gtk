@@ -355,6 +355,7 @@ class Class:
         # Will be filled in while reading the xml file
         self.methods = []
         self.signals = []
+        self.properties_lines = []
         self.constructors = []
 
     def fill_parent_details(self, nse):
@@ -382,6 +383,7 @@ class Class:
             qualifier = '' if itf.ns is self.nse.ns else itf.ns.name + '.'
             lines.append('    method as_%s = new %s (%s.upcast self)' % (itf.c_type_name, qualifier + itf.ml_name0, qualifier + itf.name + '_'))
         lines += ['    ' + x.to_ml() for x in (self.methods + self.signals)]
+        lines += self.properties_lines
         lines.append('  end')
         return lines
 
@@ -923,6 +925,28 @@ def process_namespace(namespace, env):
                         c_name = c_elem_name.replace('-', '_')
                         cls.signals.append(Signal(c_name, params, result, nse.name))
                         output_signal_code(c_elem, nse, params, result, ml, cf)
+                elif c_elem.tag == t_property and c_elem.get('writable', None) == '1' and 'setter' not in c_elem.attrib:
+                    property_name = c_elem.get('name')
+                    ml_name = property_name.replace('-', '_')
+                    setter_name = 'set_' + ml_name
+                    type = c_elem.find(t_type)
+                    if type is None:
+                        print('Skipping property %s of class %s: no "type" element' % (property_name, nse.name))
+                        continue
+                    type_name = type.attrib['name']
+                    setter_c_name = 'ml_%s_%s_%s' % (ns.name, nse.name, setter_name)
+                    if type_name == 'utf8':
+                        ml_type = 'string'
+                    else:
+                        continue
+                    ml('  external %s: [>`%s] obj -> %s -> unit = "%s"' % (setter_name, nse.c_type_name, ml_type, setter_c_name))
+                    cf()
+                    cf('CAMLprim value %s(value instance_, value value_) {' % setter_c_name)
+                    cf('  CAMLparam2(instance_, value_);')
+                    cf('  g_object_set(GObject_val(instance_), "%s", String_val(value_), NULL);' % property_name)
+                    cf('  CAMLreturn(Val_unit);')
+                    cf('}')
+                    cls.properties_lines.append('    method %s value_ = %s_.%s self value_' % (setter_name, nse.name, setter_name))
             ml('end')
             # Collect the ML lines for the class constructors
             ctor_lines, default = cls.constructor_lines()

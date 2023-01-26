@@ -9,11 +9,15 @@ let () =
     let textView = Gtk.text_view () in
     let textBuffer = textView#get_buffer in (* TODO: Check safety: get_buffer does not increment the reference count on the buffer! *)
     textBuffer#set_text "Hello, world!" (-1);
-    let startIter = textBuffer#get_start_iter in
     let iter = textBuffer#get_start_iter in
     ignore @@ iter#forward_chars 5;
-    textBuffer#delete startIter iter;
-    textBuffer#insert_markup startIter "<span color=\"blue\">Bye</span>" (-1);
+    textBuffer#delete textBuffer#get_start_iter iter;
+    textBuffer#insert_markup iter "<span color=\"blue\">Bye</span>" (-1);
+
+    let tag = Gtk.text_tag "red" in
+    tag#set_foreground "red";
+    ignore @@ textBuffer#get_tag_table#add tag;
+    textBuffer#apply_tag tag iter textBuffer#get_end_iter;
 
     window#set_child (textView :> Gtk.widget);
   end;
