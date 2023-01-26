@@ -155,6 +155,9 @@ class NamespaceElement:
         if other_ns is self.ns:
             return self.ml_name0
         return self.ns.name + '.' + self.ml_name0
+    
+    def __str__(self):
+        return self.qualified_name
 
 @dataclass
 class Types:
@@ -293,6 +296,7 @@ class ElementType:
     direction: Optional[str]
     caller_allocates: Optional[str]
     string_length_param_index: Optional[int] = None
+    is_floating_reference: bool = False
 
     @property
     def to_str(self):
@@ -360,14 +364,7 @@ class Constructor:
         self.cls = cls
         self.nse = nse
         self.params = params
-        self.set_expected_result(result)
-
-    def set_expected_result(self, result):
-        expected_result = Types(self.cls.self_type, 'Val_GObject((void *)(%s))', 'void *', None, None)
-        if result != expected_result and result.ml_type not in ['widget', 'Gtk.widget']:
-            print('Warning: return type of constructor %s of class %s does not match class or GtkWidget' %
-                  (self.name, self.nse.qualified_name))
-        self.result = expected_result
+        self.result = result
 
     def ml_lines(self):
         params_text = self.params.ctor_params()
@@ -583,7 +580,15 @@ def c_to_ml_type(typ, ns):
             return Types('int', 'Val_int(%s)', 'int', 'int', '%s')
         elif ns_elem.xml.tag == t_class and ns_elem.is_GObject or ns_elem.xml.tag == t_interface:
             ml_name0 = ns_elem.ml_name0_for(ns)
-            return Types(ml_name0 + '_', 'Val_GObject((void *)(%s))', 'void *', ml_name0, 'new %s (%%s)' % ml_name0)
+            if typ.is_floating_reference:
+                assert typ.transfer_ownership == 'none'
+                ref_op = 'g_object_ref_sink(%s)'
+            elif typ.transfer_ownership == 'none':
+                ref_op = 'g_object_ref(%s)'
+            else:
+                assert typ.transfer_ownership == 'full'
+                ref_op = '%s'
+            return Types(ml_name0 + '_', 'Val_GObject(%s)' % (ref_op % '(void *)(%s)'), 'void *', ml_name0, 'new %s (%%s)' % ml_name0)
         else:
             return None
     else:
@@ -681,6 +686,7 @@ class BaseMethodParser:
         self.ns = ns
         self.params = Params()
         self.result = None
+        self.class_elem = class_elem
 
     def parse(self):
         if not self.get_params_and_return():
@@ -729,6 +735,14 @@ class BaseMethodParser:
                         self.params.derived_params[derived_param_index].append((param_index, derived_param_value))
             elif m_elem.tag == t_return_value:
                 t = ElementType.make(m_elem)
+                if self.elem.tag == t_constructor:
+                    if any(a.qualified_name == 'GObject.InitiallyUnowned' for a in self.class_elem.ancestors):
+                        t.is_floating_reference = True
+                    return_type_nselem = self.ns.local_env.get(t.typename, None)
+                    if return_type_nselem is not self.class_elem and return_type_nselem not in self.class_elem.ancestors:
+                        self.print_skip('Return type "%s" of constructor is not the class or an ancestor in %s' % (return_type_nselem, self.class_elem.ancestors))
+                        return False
+                    t.typename = self.class_name # Constructors often return a supertype; instead, return the class
                 types = self.get_return_types(t)
                 if types == None:
                     self.print_skip('unsupported return type %s' % t.to_str)

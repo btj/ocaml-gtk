@@ -32,9 +32,6 @@ struct custom_operations GObject_custom_operations = {
 };
 
 value Val_GObject(GObject *obj) {
-  if (g_object_is_floating(obj))
-    g_object_ref_sink(obj);
-
   value result = caml_alloc_custom(&GObject_custom_operations, sizeof(GObject *), 1, 100);
   // Do 1 full GC per 100 allocations.
   GObject_val(result) = obj;

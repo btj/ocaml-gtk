@@ -7,7 +7,7 @@ let () =
     window#show;
 
     let textView = Gtk.text_view () in
-    let textBuffer = textView#get_buffer in (* TODO: Check safety: get_buffer does not increment the reference count on the buffer! *)
+    let textBuffer = textView#get_buffer in
     textBuffer#set_text "Hello, world!";
     let iter = textBuffer#get_start_iter in
     ignore @@ iter#forward_chars 5;
