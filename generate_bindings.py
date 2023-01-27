@@ -581,7 +581,9 @@ def c_to_ml_type(typ, ns):
         elif ns_elem.xml.tag == t_class and ns_elem.is_GObject or ns_elem.xml.tag == t_interface:
             ml_name0 = ns_elem.ml_name0_for(ns)
             if typ.is_floating_reference:
-                assert typ.transfer_ownership == 'none'
+                if typ.transfer_ownership != 'none':
+                    print('Expected transfer-ownership="none" for floating reference but got transfer-ownership=%s' % repr(typ.transfer_ownership))
+                    return None
                 ref_op = 'g_object_ref_sink(%s)'
             elif typ.transfer_ownership == 'none':
                 ref_op = 'g_object_ref(%s)'
