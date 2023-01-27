@@ -585,9 +585,11 @@ def c_to_ml_type(typ, ns):
                 ref_op = 'g_object_ref_sink(%s)'
             elif typ.transfer_ownership == 'none':
                 ref_op = 'g_object_ref(%s)'
-            else:
-                assert typ.transfer_ownership == 'full'
+            elif typ.transfer_ownership == 'full':
                 ref_op = '%s'
+            else:
+                print("Unsupported attribute 'transfer-ownership=\"%s\"'" % typ.transfer_ownership)
+                return None
             return Types(ml_name0 + '_', 'Val_GObject(%s)' % (ref_op % '(void *)(%s)'), 'void *', ml_name0, 'new %s (%%s)' % ml_name0)
         else:
             return None
