@@ -7,7 +7,7 @@ let () =
     Gtk.Window_.set_default_size window 200 200;
 
     let textView = Gtk.TextView_._new () in
-    let textBuffer = Gtk.TextView_.get_buffer textView in (* TODO: Check safety: get_buffer does not increment the reference count on the buffer! *)
+    let textBuffer = Gtk.TextView_.get_buffer textView in
     Gtk.TextBuffer_.set_text textBuffer "Hello, world!";
     let startIter = Gtk.TextIter_.alloc_uninit_UNSAFE () in
     Gtk.TextBuffer_.get_start_iter textBuffer startIter;
