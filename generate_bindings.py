@@ -541,6 +541,8 @@ def ml_to_c_type(typ, ns):
         return Types('int', 'Long_val(%s)', 'guint32', 'int', '%s')
     elif name == 'gint64':
         return Types('int64', 'Int64_val(%s)', 'gint64', 'int64', '%s')
+    elif name == 'gdouble':
+        return Types('float', 'Double_val(%s)', 'gdouble', 'float', '%s')
     ns_elem = ns.local_env.get(name, None)
     if ns_elem is not None:
         if ns_elem.xml.tag == t_enumeration or ns_elem.xml.tag == t_bitfield:
@@ -569,6 +571,8 @@ def c_to_ml_type(typ, ns):
         return Types('int', 'Val_long(%s)', 'guint32', 'int', '%s')
     elif name == 'gboolean':
         return Types('bool', '(%s ? Val_true : Val_false)', 'gboolean', 'bool', '%s')
+    elif name == 'gdouble':
+        return Types('float', 'caml_copy_double(%s)', 'gdouble', 'float', '%s')
     elif name == 'utf8':
         if typ.allow_none:
             return Types('string option', 'Val_string_option(%s)', 'const char *', 'string option', '%s')
