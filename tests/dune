@@ -1,0 +1,4 @@
+(tests
+ (names get_set)
+ (modes exe)
+ (libraries alcotest ocamlgtk))
