@@ -35,3 +35,13 @@ On Ubuntu 22.04.1, these system packages are required:
 2. Run `dune build`
 3. Built example programme can be found at `_build/default/examples/example0.exe`
 
+## Safety
+
+We intend for the following safety property to hold:
+
+Assuming the GObject Introspection data is accurate, an OCaml program that uses the generated bindings (and that does not use unsafe OCaml features such as `Obj.magic`) shall not exhibit undefined behavior, except that:
+- record allocation functions such as `Gtk.TextIter_.alloc_uninit_UNSAFE` do not initialize the record's fields; passing such uninitialized records to APIs that expect the record to be initialized is unsafe
+- `textBuffer#get_start_iter` and similar APIs do not increment the TextBuffer object's refcount; i.e. a TextIter does not own a reference to a TextBuffer. So the existence of a TextIter `i` does not keep `i#get_buffer` alive. However, if [GNOME/gtk!6087](https://gitlab.gnome.org/GNOME/gtk/-/merge_requests/6087) is merged, using a TextIter after the TextBuffer has been freed will with very large probability either cause a clean segfault or cause an "Invalid text buffer iterator" warning to be printed. (Using `i#get_buffer` in other ways, however, has undefined behavior.)
+- Similar issues probably exist with other types of records.
+
+Known violations of this property should be recorded as issues with label `safety`.
